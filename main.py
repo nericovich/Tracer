@@ -1,0 +1,838 @@
+from __future__ import annotations
+
+import calendar
+from datetime import date, datetime, timedelta
+from typing import Any, Literal, Optional
+
+import httpx
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import inspect, text
+from sqlalchemy.orm import Session
+
+from database import engine, get_db, init_db
+from models import AssetPrice, BankDeposit, HiddenAsset, PortfolioHistory, Transaction, TransactionType
+
+
+app = FastAPI(title="Трекер портфеля")
+
+InterestPaymentType = Literal["daily", "monthly", "at_end", "upfront"]
+
+
+# ============ Pydantic Schemas ============
+
+
+class TransactionCreate(BaseModel):
+    date: datetime
+    type: TransactionType
+    ticker: Optional[str] = None
+    quantity: Optional[float] = None
+    total_amount: Optional[float] = None
+
+
+class PriceUpdate(BaseModel):
+    ticker: str
+    current_price: float = Field(ge=0)
+
+
+class BankDepositCreate(BaseModel):
+    bank_name: str
+    amount: float = Field(gt=0)
+    start_date: date
+    end_date: date
+    apy_percent: float = Field(ge=0)
+    interest_payment_type: InterestPaymentType = "at_end"
+    expected_profit: Optional[float] = None
+
+
+class AssetHolding(BaseModel):
+    ticker: str
+    quantity: float
+    current_price: float
+    total_value: float
+    portfolio_share_percent: float
+    cost_basis: float
+    average_cost: float
+    unrealized_pnl: float
+    unrealized_pnl_percent: float
+    realized_pnl: float
+    total_pnl: float
+    total_pnl_percent: float
+
+
+class DashboardResponse(BaseModel):
+    total_capital: float
+    total_portfolio_value: float
+    total_assets_value: float
+    total_invested_in_assets: float
+    total_assets_pnl: float
+    total_assets_pnl_percent: float
+    total_in_deposits: float
+    total_deposits_principal: float
+    total_deposits_accrued_profit: float
+    total_deposits_expected_profit: float
+    total_unrealized_pnl: float
+    total_unrealized_pnl_percent: float
+    cash_balance: float
+    assets: list[AssetHolding]
+    deposits: list[dict[str, Any]]
+
+
+# ============ Compatibility Migration ============
+
+
+def ensure_schema() -> None:
+    """Create missing columns for existing SQLite databases."""
+    init_db()
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("bank_deposits")}
+
+    with engine.begin() as connection:
+        if "interest_payment_type" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE bank_deposits "
+                    "ADD COLUMN interest_payment_type VARCHAR DEFAULT 'at_end'"
+                )
+            )
+
+
+# ============ MOEX API Integration ============
+
+
+def _value_by_column(block: dict[str, Any], row: list[Any], name: str) -> Any:
+    try:
+        return row[block["columns"].index(name)]
+    except (ValueError, IndexError, KeyError):
+        return None
+
+
+async def get_moex_price(ticker: str) -> Optional[float]:
+    """Get the latest available traded price from MOEX ISS."""
+    secid = ticker.strip().upper()
+    if not secid:
+        return None
+
+    url = (
+        "https://iss.moex.com/iss/engines/stock/markets/shares/"
+        f"securities/{secid}.json"
+    )
+    params = {"iss.meta": "off", "lang": "ru"}
+    preferred_boards = ["TQBR", "TQTF", "TQIF", "TQTD", "TQPI"]
+    price_fields = [
+        "LAST",
+        "LCURRENTPRICE",
+        "MARKETPRICE",
+        "WAPRICE",
+        "LEGALCLOSEPRICE",
+        "PREVPRICE",
+    ]
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+    except Exception as exc:
+        print(f"MOEX price error for {secid}: {exc}")
+        return None
+
+    marketdata = data.get("marketdata", {})
+    rows = marketdata.get("data", [])
+    if not rows:
+        return None
+
+    def row_score(row: list[Any]) -> int:
+        board = _value_by_column(marketdata, row, "BOARDID")
+        try:
+            return preferred_boards.index(board)
+        except ValueError:
+            return len(preferred_boards)
+
+    for row in sorted(rows, key=row_score):
+        for field in price_fields:
+            value = _value_by_column(marketdata, row, field)
+            if value not in (None, "", 0):
+                return float(value)
+
+    return None
+
+
+async def get_moex_historical_price(ticker: str, trade_date: date) -> Optional[float]:
+    """Get close/market price for the nearest trading day not later than trade_date."""
+    secid = ticker.strip().upper()
+    if not secid:
+        return None
+
+    start_date = trade_date - timedelta(days=14)
+    url = (
+        "https://iss.moex.com/iss/history/engines/stock/markets/shares/"
+        f"securities/{secid}.json"
+    )
+    params = {
+        "from": start_date.isoformat(),
+        "till": trade_date.isoformat(),
+        "iss.meta": "off",
+        "lang": "ru",
+    }
+    preferred_boards = ["TQBR", "TQTF", "TQIF", "TQTD", "TQPI"]
+    price_fields = ["CLOSE", "MARKETPRICE3", "MARKETPRICE2", "LEGALCLOSEPRICE", "WAPRICE"]
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+    except Exception as exc:
+        print(f"MOEX history price error for {secid}: {exc}")
+        return None
+
+    history = data.get("history", {})
+    rows = history.get("data", [])
+    if not rows:
+        return None
+
+    def row_score(row: list[Any]) -> tuple[str, int]:
+        row_date = _value_by_column(history, row, "TRADEDATE") or ""
+        board = _value_by_column(history, row, "BOARDID")
+        try:
+            board_rank = preferred_boards.index(board)
+        except ValueError:
+            board_rank = len(preferred_boards)
+        return (str(row_date), -board_rank)
+
+    for row in sorted(rows, key=row_score, reverse=True):
+        for field in price_fields:
+            value = _value_by_column(history, row, field)
+            if value not in (None, "", 0):
+                return float(value)
+
+    return None
+
+
+async def get_transaction_price(ticker: str, transaction_date: date) -> Optional[float]:
+    if transaction_date < date.today():
+        historical_price = await get_moex_historical_price(ticker, transaction_date)
+        if historical_price is not None:
+            return historical_price
+
+    return await get_moex_price(ticker)
+
+
+async def search_moex_stocks(query: str = "") -> list[dict[str, str]]:
+    """Search securities via broad MOEX ISS search, so funds like SBGD are included."""
+    normalized_query = query.strip().upper()
+    if not normalized_query:
+        return []
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://iss.moex.com/iss/securities.json",
+                params={"q": normalized_query, "is_trading": 1, "iss.meta": "off", "lang": "ru"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception as exc:
+        print(f"MOEX search error for {normalized_query}: {exc}")
+        return []
+
+    securities = data.get("securities", {})
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    for row in securities.get("data", []):
+        secid = _value_by_column(securities, row, "secid")
+        name = (
+            _value_by_column(securities, row, "name")
+            or _value_by_column(securities, row, "shortname")
+            or secid
+        )
+        if not secid:
+            continue
+
+        secid = str(secid).upper()
+        name = str(name)
+        if normalized_query not in secid and normalized_query not in name.upper():
+            continue
+        if secid in seen:
+            continue
+
+        seen.add(secid)
+        results.append({"ticker": secid, "name": name})
+
+    return results[:20]
+
+
+async def update_price_from_moex(db: Session, ticker: str) -> Optional[float]:
+    secid = ticker.strip().upper()
+    price = await get_moex_price(secid)
+    if price is None:
+        return None
+
+    price_record = db.query(AssetPrice).filter(AssetPrice.ticker == secid).first()
+    if price_record:
+        price_record.current_price = price
+        price_record.last_updated = datetime.utcnow()
+    else:
+        db.add(AssetPrice(ticker=secid, current_price=price, last_updated=datetime.utcnow()))
+
+    db.commit()
+    return price
+
+
+# ============ Financial Calculations ============
+
+
+def add_months(value: date, months: int) -> date:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(value.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def simple_deposit_profit(amount: float, apy_percent: float, start_date: date, end_date: date) -> float:
+    days = max((end_date - start_date).days, 0)
+    return amount * (apy_percent / 100) * days / 365
+
+
+def monthly_payment_dates(start_date: date, end_date: date) -> list[date]:
+    payment_dates: list[date] = []
+    month_number = 1
+
+    while True:
+        payment_date = add_months(start_date, month_number)
+        if payment_date >= end_date:
+            break
+        payment_dates.append(payment_date)
+        month_number += 1
+
+    if end_date > start_date:
+        payment_dates.append(end_date)
+
+    return payment_dates
+
+
+def deposit_expected_profit(deposit: BankDeposit) -> float:
+    if deposit.expected_profit and deposit.expected_profit > 0:
+        return float(deposit.expected_profit)
+    return simple_deposit_profit(
+        float(deposit.amount),
+        float(deposit.apy_percent),
+        deposit.start_date,
+        deposit.end_date,
+    )
+
+
+def deposit_accrued_profit(deposit: BankDeposit, valuation_date: date) -> float:
+    expected_profit = deposit_expected_profit(deposit)
+    payment_type = getattr(deposit, "interest_payment_type", None) or "at_end"
+
+    if valuation_date < deposit.start_date:
+        return 0.0
+    if valuation_date >= deposit.end_date:
+        return expected_profit
+    if payment_type == "upfront":
+        return expected_profit
+    if payment_type == "at_end":
+        return 0.0
+
+    total_days = max((deposit.end_date - deposit.start_date).days, 1)
+    elapsed_days = max((valuation_date - deposit.start_date).days, 0)
+
+    if payment_type == "daily":
+        return expected_profit * min(elapsed_days / total_days, 1)
+
+    if payment_type == "monthly":
+        payments = monthly_payment_dates(deposit.start_date, deposit.end_date)
+        if not payments:
+            return 0.0
+
+        completed_payments = sum(1 for payment_date in payments if payment_date <= valuation_date)
+        return expected_profit * completed_payments / len(payments)
+
+    return 0.0
+
+
+def asset_transaction_amount(transaction: Transaction) -> float:
+    """Use stored execution price for asset deals; fall back to legacy total_amount."""
+    quantity = float(transaction.quantity or 0)
+    price_per_unit = float(transaction.price_per_unit or 0)
+
+    if (
+        transaction.type in [TransactionType.BUY_ASSET, TransactionType.SELL_ASSET]
+        and quantity > 0
+        and price_per_unit > 0
+    ):
+        return quantity * price_per_unit
+
+    return float(transaction.total_amount or 0)
+
+
+def get_hidden_tickers(db: Session) -> set[str]:
+    return {
+        item.ticker.upper()
+        for item in db.query(HiddenAsset).all()
+        if item.ticker
+    }
+
+
+def calculate_current_holdings(db: Session) -> dict[str, dict[str, float]]:
+    """Calculate quantity, remaining cost basis, and realized PnL by ticker."""
+    holdings: dict[str, dict[str, float]] = {}
+
+    transactions = (
+        db.query(Transaction)
+        .filter(Transaction.ticker.isnot(None))
+        .order_by(Transaction.date, Transaction.id)
+        .all()
+    )
+
+    for transaction in transactions:
+        ticker = (transaction.ticker or "").upper()
+        if not ticker:
+            continue
+
+        holding = holdings.setdefault(
+            ticker,
+            {"quantity": 0.0, "cost_basis": 0.0, "realized_pnl": 0.0},
+        )
+
+        quantity = float(transaction.quantity or 0)
+        amount = asset_transaction_amount(transaction)
+
+        if transaction.type == TransactionType.BUY_ASSET:
+            holding["quantity"] += quantity
+            holding["cost_basis"] += amount
+
+        elif transaction.type == TransactionType.SELL_ASSET and quantity > 0:
+            current_quantity = holding["quantity"]
+            if current_quantity <= 0:
+                holding["realized_pnl"] += amount
+                continue
+
+            sold_quantity = min(quantity, current_quantity)
+            average_cost = holding["cost_basis"] / current_quantity
+            sold_cost_basis = average_cost * sold_quantity
+
+            holding["quantity"] = current_quantity - sold_quantity
+            holding["cost_basis"] = max(holding["cost_basis"] - sold_cost_basis, 0.0)
+            holding["realized_pnl"] += amount - sold_cost_basis
+
+    return {
+        ticker: holding
+        for ticker, holding in holdings.items()
+        if holding["quantity"] > 0 or abs(holding["realized_pnl"]) > 0.0001
+    }
+
+
+def calculate_cash_balance(db: Session) -> float:
+    cash_balance = 0.0
+
+    for transaction in db.query(Transaction).order_by(Transaction.date, Transaction.id).all():
+        amount = (
+            asset_transaction_amount(transaction)
+            if transaction.type in [TransactionType.BUY_ASSET, TransactionType.SELL_ASSET]
+            else float(transaction.total_amount or 0)
+        )
+
+        if transaction.type == TransactionType.DEPOSIT_FIAT:
+            cash_balance += amount
+        elif transaction.type == TransactionType.WITHDRAW_FIAT:
+            cash_balance -= amount
+        elif transaction.type == TransactionType.BUY_ASSET:
+            cash_balance -= amount
+        elif transaction.type == TransactionType.SELL_ASSET:
+            cash_balance += amount
+
+    return cash_balance
+
+
+def get_or_create_price(db: Session, ticker: str) -> AssetPrice:
+    secid = ticker.strip().upper()
+    price = db.query(AssetPrice).filter(AssetPrice.ticker == secid).first()
+    if price:
+        return price
+
+    price = AssetPrice(ticker=secid, current_price=0.0, last_updated=datetime.utcnow())
+    db.add(price)
+    db.commit()
+    db.refresh(price)
+    return price
+
+
+async def refresh_open_asset_prices(db: Session, max_age_minutes: int = 15) -> None:
+    """Refresh visible and hidden open positions; totals must use the same current prices."""
+    holdings = calculate_current_holdings(db)
+    now = datetime.utcnow()
+
+    for ticker, holding in holdings.items():
+        if holding["quantity"] <= 0:
+            continue
+
+        price_record = db.query(AssetPrice).filter(AssetPrice.ticker == ticker).first()
+        is_stale = (
+            price_record is None
+            or price_record.current_price in (None, 0)
+            or price_record.last_updated is None
+            or price_record.last_updated < now - timedelta(minutes=max_age_minutes)
+        )
+
+        if is_stale:
+            await update_price_from_moex(db, ticker)
+
+
+def build_dashboard_snapshot(db: Session, valuation_date: Optional[date] = None) -> DashboardResponse:
+    valuation_date = valuation_date or date.today()
+
+    holdings = calculate_current_holdings(db)
+    cash_balance = calculate_cash_balance(db)
+
+    active_deposits = (
+        db.query(BankDeposit)
+        .filter(
+            BankDeposit.start_date <= valuation_date,
+            BankDeposit.end_date >= valuation_date,
+        )
+        .all()
+    )
+    total_deposits_principal = 0.0
+    total_deposits_accrued_profit = 0.0
+    total_deposits_expected_profit = 0.0
+    deposits_data: list[dict[str, Any]] = []
+
+    for deposit in active_deposits:
+        expected_profit = deposit_expected_profit(deposit)
+        accrued_profit = deposit_accrued_profit(deposit, valuation_date)
+        current_value = float(deposit.amount) + accrued_profit
+        days_total = max((deposit.end_date - deposit.start_date).days, 0)
+        days_elapsed = min(max((valuation_date - deposit.start_date).days, 0), days_total)
+
+        total_deposits_principal += float(deposit.amount)
+        total_deposits_accrued_profit += accrued_profit
+        total_deposits_expected_profit += expected_profit
+
+        deposits_data.append(
+            {
+                "id": deposit.id,
+                "bank_name": deposit.bank_name,
+                "amount": float(deposit.amount),
+                "current_value": current_value,
+                "apy_percent": float(deposit.apy_percent),
+                "start_date": deposit.start_date.isoformat(),
+                "end_date": deposit.end_date.isoformat(),
+                "interest_payment_type": getattr(deposit, "interest_payment_type", None) or "at_end",
+                "expected_profit": expected_profit,
+                "accrued_profit": accrued_profit,
+                "days_elapsed": days_elapsed,
+                "days_total": days_total,
+                "days_remaining": max((deposit.end_date - valuation_date).days, 0),
+            }
+        )
+
+    assets: list[AssetHolding] = []
+    hidden_tickers = get_hidden_tickers(db)
+    total_assets_value = 0.0
+    total_assets_cost_basis = 0.0
+    total_assets_unrealized_pnl = 0.0
+    total_assets_realized_pnl = 0.0
+
+    for ticker, holding in holdings.items():
+        quantity = float(holding["quantity"])
+        cost_basis = float(holding["cost_basis"])
+        realized_pnl = float(holding["realized_pnl"])
+        price_record = get_or_create_price(db, ticker)
+        current_price = float(price_record.current_price or 0)
+        total_value = quantity * current_price
+        unrealized_pnl = total_value - cost_basis
+        total_pnl = unrealized_pnl + realized_pnl
+
+        if quantity <= 0 and abs(realized_pnl) > 0.0001:
+            total_assets_realized_pnl += realized_pnl
+            continue
+
+        total_assets_value += total_value
+        total_assets_cost_basis += cost_basis
+        total_assets_unrealized_pnl += unrealized_pnl
+        total_assets_realized_pnl += realized_pnl
+
+        if ticker not in hidden_tickers:
+            assets.append(
+                AssetHolding(
+                    ticker=ticker,
+                    quantity=quantity,
+                    current_price=current_price,
+                    total_value=total_value,
+                    portfolio_share_percent=0,
+                    cost_basis=cost_basis,
+                    average_cost=(cost_basis / quantity) if quantity > 0 else 0,
+                    unrealized_pnl=unrealized_pnl,
+                    unrealized_pnl_percent=(unrealized_pnl / cost_basis * 100) if cost_basis > 0 else 0,
+                    realized_pnl=realized_pnl,
+                    total_pnl=total_pnl,
+                    total_pnl_percent=(total_pnl / cost_basis * 100) if cost_basis > 0 else 0,
+                )
+            )
+
+    total_in_deposits = total_deposits_principal + total_deposits_accrued_profit
+    total_portfolio_value = total_assets_value + total_in_deposits + cash_balance
+    total_assets_pnl = total_assets_unrealized_pnl + total_assets_realized_pnl
+    total_unrealized_pnl = total_assets_pnl + total_deposits_accrued_profit
+    total_cost_basis = total_assets_cost_basis + total_deposits_principal
+
+    for asset in assets:
+        asset.portfolio_share_percent = (
+            asset.total_value / total_portfolio_value * 100
+            if total_portfolio_value > 0
+            else 0
+        )
+
+    return DashboardResponse(
+        total_capital=total_portfolio_value,
+        total_portfolio_value=total_portfolio_value,
+        total_assets_value=total_assets_value,
+        total_invested_in_assets=total_assets_cost_basis,
+        total_assets_pnl=total_assets_pnl,
+        total_assets_pnl_percent=(
+            total_assets_pnl / total_assets_cost_basis * 100
+            if total_assets_cost_basis > 0
+            else 0
+        ),
+        total_in_deposits=total_in_deposits,
+        total_deposits_principal=total_deposits_principal,
+        total_deposits_accrued_profit=total_deposits_accrued_profit,
+        total_deposits_expected_profit=total_deposits_expected_profit,
+        total_unrealized_pnl=total_unrealized_pnl,
+        total_unrealized_pnl_percent=(
+            total_unrealized_pnl / total_cost_basis * 100
+            if total_cost_basis > 0
+            else 0
+        ),
+        cash_balance=cash_balance,
+        assets=assets,
+        deposits=deposits_data,
+    )
+
+
+def update_portfolio_history(db: Session) -> None:
+    today = date.today()
+    snapshot = build_dashboard_snapshot(db, today)
+
+    previous_history = (
+        db.query(PortfolioHistory)
+        .filter(PortfolioHistory.date < today)
+        .order_by(PortfolioHistory.date.desc())
+        .first()
+    )
+    previous_value = previous_history.total_value if previous_history else 0
+    daily_change_percent = (
+        (snapshot.total_portfolio_value - previous_value) / previous_value * 100
+        if previous_value > 0
+        else 0
+    )
+
+    history_record = db.query(PortfolioHistory).filter(PortfolioHistory.date == today).first()
+    if history_record:
+        history_record.total_value = snapshot.total_portfolio_value
+        history_record.daily_change_percent = daily_change_percent
+    else:
+        db.add(
+            PortfolioHistory(
+                date=today,
+                total_value=snapshot.total_portfolio_value,
+                daily_change_percent=daily_change_percent,
+            )
+        )
+
+    db.commit()
+
+
+# ============ API Endpoints ============
+
+
+@app.on_event("startup")
+def startup_event() -> None:
+    ensure_schema()
+
+
+@app.get("/")
+async def root() -> HTMLResponse:
+    with open("index.html", "r", encoding="utf-8") as file:
+        return HTMLResponse(content=file.read())
+
+
+@app.get("/api/dashboard", response_model=DashboardResponse)
+async def get_dashboard(db: Session = Depends(get_db)) -> DashboardResponse:
+    await refresh_open_asset_prices(db)
+    snapshot = build_dashboard_snapshot(db)
+    update_portfolio_history(db)
+    return snapshot
+
+
+@app.post("/api/transactions")
+async def add_transaction(transaction: TransactionCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
+    price_per_unit = None
+    ticker = transaction.ticker.strip().upper() if transaction.ticker else None
+    total_amount = float(transaction.total_amount or 0)
+
+    if transaction.type in [TransactionType.BUY_ASSET, TransactionType.SELL_ASSET]:
+        if not ticker or not transaction.quantity or transaction.quantity <= 0:
+            raise HTTPException(status_code=400, detail="Укажите тикер и количество акций.")
+
+        price_per_unit = await update_price_from_moex(db, ticker)
+        if price_per_unit is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Не удалось получить цену для {ticker} с Мосбиржи.",
+            )
+        total_amount = float(price_per_unit) * float(transaction.quantity)
+
+        hidden_asset = db.query(HiddenAsset).filter(HiddenAsset.ticker == ticker).first()
+        if hidden_asset:
+            db.delete(hidden_asset)
+            db.commit()
+
+    elif total_amount <= 0:
+        raise HTTPException(status_code=400, detail="Сумма должна быть больше нуля.")
+
+    db_transaction = Transaction(
+        date=transaction.date,
+        type=transaction.type,
+        ticker=ticker,
+        quantity=transaction.quantity,
+        price_per_unit=price_per_unit,
+        total_amount=total_amount,
+    )
+    db.add(db_transaction)
+    db.commit()
+    db.refresh(db_transaction)
+
+    update_portfolio_history(db)
+    return {"id": db_transaction.id, "message": "Операция добавлена", "price": price_per_unit}
+
+
+@app.get("/api/prices/{ticker}")
+async def get_price(ticker: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    price = await update_price_from_moex(db, ticker)
+    if price is None:
+        raise HTTPException(status_code=404, detail=f"Цена для {ticker.upper()} не найдена")
+    return {"ticker": ticker.upper(), "price": price}
+
+
+@app.post("/api/prices")
+async def update_price(price_update: PriceUpdate, db: Session = Depends(get_db)) -> dict[str, Any]:
+    ticker = price_update.ticker.strip().upper()
+    price_record = db.query(AssetPrice).filter(AssetPrice.ticker == ticker).first()
+    if price_record:
+        price_record.current_price = price_update.current_price
+        price_record.last_updated = datetime.utcnow()
+    else:
+        db.add(
+            AssetPrice(
+                ticker=ticker,
+                current_price=price_update.current_price,
+                last_updated=datetime.utcnow(),
+            )
+        )
+    db.commit()
+    update_portfolio_history(db)
+    return {"ticker": ticker, "price": price_update.current_price}
+
+
+@app.delete("/api/assets/{ticker}")
+async def hide_asset(ticker: str, db: Session = Depends(get_db)) -> dict[str, str]:
+    secid = ticker.strip().upper()
+    if not secid:
+        raise HTTPException(status_code=400, detail="Укажите тикер.")
+
+    holdings = calculate_current_holdings(db)
+    if secid not in holdings or holdings[secid]["quantity"] <= 0:
+        raise HTTPException(status_code=404, detail=f"Актив {secid} не найден в открытых позициях.")
+
+    hidden_asset = db.query(HiddenAsset).filter(HiddenAsset.ticker == secid).first()
+    if not hidden_asset:
+        db.add(HiddenAsset(ticker=secid, hidden_at=datetime.utcnow()))
+        db.commit()
+
+    return {
+        "ticker": secid,
+        "message": "Актив скрыт из таблицы. Операции и статистика не изменены.",
+    }
+
+
+@app.get("/api/history")
+async def get_portfolio_history(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    update_portfolio_history(db)
+    history = db.query(PortfolioHistory).order_by(PortfolioHistory.date).all()
+    if not history:
+        snapshot = build_dashboard_snapshot(db)
+        return [
+            {
+                "date": date.today().isoformat(),
+                "total_value": snapshot.total_portfolio_value,
+                "daily_change_percent": 0,
+            }
+        ]
+
+    return [
+        {
+            "date": item.date.isoformat(),
+            "total_value": float(item.total_value or 0),
+            "daily_change_percent": float(item.daily_change_percent or 0),
+        }
+        for item in history
+    ]
+
+
+@app.get("/api/stocks/search")
+async def search_stocks(q: str = "") -> list[dict[str, str]]:
+    if not q.strip():
+        return []
+    return await search_moex_stocks(q)
+
+
+@app.post("/api/bank-deposits")
+async def add_bank_deposit(deposit: BankDepositCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
+    if deposit.end_date <= deposit.start_date:
+        raise HTTPException(status_code=400, detail="Дата окончания должна быть позже даты начала.")
+
+    expected_profit = (
+        deposit.expected_profit
+        if deposit.expected_profit is not None and deposit.expected_profit > 0
+        else simple_deposit_profit(
+            deposit.amount,
+            deposit.apy_percent,
+            deposit.start_date,
+            deposit.end_date,
+        )
+    )
+
+    new_deposit = BankDeposit(
+        bank_name=deposit.bank_name.strip(),
+        amount=deposit.amount,
+        start_date=deposit.start_date,
+        end_date=deposit.end_date,
+        apy_percent=deposit.apy_percent,
+        expected_profit=expected_profit,
+        interest_payment_type=deposit.interest_payment_type,
+    )
+    db.add(new_deposit)
+    db.commit()
+    db.refresh(new_deposit)
+
+    update_portfolio_history(db)
+    return {"id": new_deposit.id, "message": "Вклад добавлен", "expected_profit": expected_profit}
+
+
+@app.get("/api/health")
+async def health_check() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)

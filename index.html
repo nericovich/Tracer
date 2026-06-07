@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Трекер портфеля</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        body {
+            background:
+                radial-gradient(circle at top left, rgba(37, 99, 235, 0.18), transparent 28rem),
+                radial-gradient(circle at top right, rgba(16, 185, 129, 0.12), transparent 24rem),
+                #0f172a;
+        }
+
+        .surface {
+            background: rgba(15, 23, 42, 0.82);
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            box-shadow: 0 18px 50px rgba(2, 6, 23, 0.28);
+            backdrop-filter: blur(18px);
+        }
+
+        .soft {
+            background: rgba(30, 41, 59, 0.64);
+            border: 1px solid rgba(148, 163, 184, 0.14);
+        }
+
+        .field {
+            width: 100%;
+            border-radius: 0.75rem;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            background: rgba(15, 23, 42, 0.84);
+            color: #f8fafc;
+            padding: 0.7rem 0.9rem;
+            outline: none;
+        }
+
+        .field:focus {
+            border-color: #38bdf8;
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
+        }
+
+        .btn {
+            border-radius: 0.75rem;
+            padding: 0.7rem 1rem;
+            font-weight: 700;
+            transition: transform 0.15s ease, background 0.15s ease, border 0.15s ease;
+        }
+
+        .btn:active {
+            transform: translateY(1px);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #2563eb, #0891b2);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #1d4ed8, #0e7490);
+        }
+
+        .btn-secondary {
+            background: rgba(51, 65, 85, 0.82);
+            color: #e2e8f0;
+            border: 1px solid rgba(148, 163, 184, 0.18);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(71, 85, 105, 0.88);
+        }
+
+        .table-row:hover {
+            background: rgba(51, 65, 85, 0.38);
+        }
+    </style>
+</head>
+<body class="text-slate-100 antialiased">
+    <div id="app" class="min-h-screen">
+        <header class="border-b border-slate-800/80 bg-slate-950/70">
+            <div class="max-w-7xl mx-auto px-5 py-6">
+                <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                    <div>
+                        <p class="text-sm uppercase tracking-[0.22em] text-cyan-300/80">Личный капитал</p>
+                        <h1 class="mt-2 text-3xl md:text-4xl font-bold text-white">Трекер портфеля</h1>
+                        <p class="mt-2 text-slate-400">Российские акции, фонды Мосбиржи и банковские вклады в рублях</p>
+                    </div>
+                    <div class="flex flex-wrap gap-3">
+                        <button @click="openTransactionModal" class="btn btn-primary">Добавить операцию</button>
+                        <button @click="openDepositModal" class="btn btn-secondary">Добавить вклад</button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <main class="max-w-7xl mx-auto px-5 py-7">
+            <div v-if="error" class="mb-5 rounded-xl border border-red-500/30 bg-red-950/60 px-4 py-3 text-red-100">
+                {{ error }}
+            </div>
+
+            <div v-if="loading" class="surface rounded-2xl p-10 text-center text-slate-300">
+                Загружаю портфель...
+            </div>
+
+            <template v-else>
+                <section class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
+                    <div class="surface rounded-2xl p-5">
+                        <p class="text-sm text-slate-400">Общий капитал</p>
+                        <p class="mt-3 text-3xl font-bold text-white">{{ formatRub(dashboard.total_portfolio_value) }}</p>
+                        <p :class="['mt-3 text-sm font-semibold', dashboard.total_unrealized_pnl >= 0 ? 'text-emerald-300' : 'text-red-300']">
+                            {{ signedRub(dashboard.total_unrealized_pnl) }}
+                            <span class="font-normal text-slate-400">({{ formatPercent(dashboard.total_unrealized_pnl_percent) }})</span>
+                        </p>
+                    </div>
+
+                    <div class="surface rounded-2xl p-5">
+                        <p class="text-sm text-slate-400">Акции и фонды</p>
+                        <p class="mt-3 text-3xl font-bold text-cyan-300">{{ formatRub(dashboard.total_assets_value) }}</p>
+                        <p class="mt-3 text-sm text-slate-400">
+                            Себестоимость: {{ formatRub(dashboard.total_invested_in_assets) }}
+                        </p>
+                    </div>
+
+                    <div class="surface rounded-2xl p-5">
+                        <p class="text-sm text-slate-400">Банковские вклады</p>
+                        <p class="mt-3 text-3xl font-bold text-amber-300">{{ formatRub(dashboard.total_in_deposits) }}</p>
+                        <p class="mt-3 text-sm text-emerald-300">
+                            Начислено: {{ formatRub(dashboard.total_deposits_accrued_profit) }}
+                        </p>
+                    </div>
+
+                    <div class="surface rounded-2xl p-5">
+                        <p class="text-sm text-slate-400">Свободные деньги</p>
+                        <p class="mt-3 text-3xl font-bold text-emerald-300">{{ formatRub(dashboard.cash_balance) }}</p>
+                        <p class="mt-3 text-sm text-slate-400">
+                            Не вложены в акции или вклады
+                        </p>
+                    </div>
+                </section>
+
+                <section class="surface rounded-2xl p-5 mb-6">
+                    <div class="flex flex-col gap-2 md:flex-row md:items-end md:justify-between mb-4">
+                        <div>
+                            <h2 class="text-xl font-bold text-white">История стоимости портфеля</h2>
+                            <p class="text-sm text-slate-400">График учитывает акции, вклады с начисленной прибылью и свободные деньги</p>
+                        </div>
+                        <button @click="refreshAll" class="btn btn-secondary text-sm">Обновить</button>
+                    </div>
+                    <div class="h-80">
+                        <canvas id="portfolioChart"></canvas>
+                    </div>
+                    <p v-if="history.length === 0" class="mt-4 text-center text-sm text-slate-400">
+                        История появится после первой операции или вклада.
+                    </p>
+                </section>
+
+                <section class="surface rounded-2xl p-5 mb-6">
+                    <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-5">
+                        <div>
+                            <h2 class="text-xl font-bold text-white">Акции и фонды</h2>
+                            <p class="text-sm text-slate-400">Текущая стоимость и прибыль по открытым позициям</p>
+                        </div>
+                        <div class="soft rounded-xl px-4 py-3 text-sm">
+                            <span class="text-slate-400">Прибыль по акциям:</span>
+                            <span :class="['ml-2 font-bold', dashboard.total_assets_pnl >= 0 ? 'text-emerald-300' : 'text-red-300']">
+                                {{ signedRub(dashboard.total_assets_pnl) }}
+                            </span>
+                        </div>
+                    </div>
+
+                    <div v-if="dashboard.assets.length === 0" class="soft rounded-xl p-8 text-center text-slate-400">
+                        Нет открытых позиций. Добавьте покупку акции или фонда.
+                    </div>
+
+                    <div v-else class="overflow-x-auto">
+                        <table class="w-full min-w-[1040px] text-sm">
+                            <thead>
+                                <tr class="border-b border-slate-700 text-slate-400">
+                                    <th class="py-3 pr-4 text-left font-semibold">Тикер</th>
+                                    <th class="py-3 px-4 text-right font-semibold">Количество</th>
+                                    <th class="py-3 px-4 text-right font-semibold">Средняя</th>
+                                    <th class="py-3 px-4 text-right font-semibold">Текущая</th>
+                                    <th class="py-3 px-4 text-right font-semibold">Стоимость</th>
+                                    <th class="py-3 px-4 text-right font-semibold">Доля</th>
+                                    <th class="py-3 px-4 text-right font-semibold">Прибыль</th>
+                                    <th class="py-3 px-4 text-right font-semibold">%</th>
+                                    <th class="py-3 pl-4 text-right font-semibold">Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="asset in dashboard.assets" :key="asset.ticker" class="table-row border-b border-slate-800">
+                                    <td class="py-4 pr-4 font-bold text-cyan-300">{{ asset.ticker }}</td>
+                                    <td class="py-4 px-4 text-right">{{ formatNumber(asset.quantity, 4) }}</td>
+                                    <td class="py-4 px-4 text-right">{{ formatRub(asset.average_cost) }}</td>
+                                    <td class="py-4 px-4 text-right">{{ formatRub(asset.current_price) }}</td>
+                                    <td class="py-4 px-4 text-right font-semibold">{{ formatRub(asset.total_value) }}</td>
+                                    <td class="py-4 px-4 text-right text-violet-300">{{ formatPercent(asset.portfolio_share_percent) }}</td>
+                                    <td :class="['py-4 px-4 text-right font-bold', asset.total_pnl >= 0 ? 'text-emerald-300' : 'text-red-300']">
+                                        {{ signedRub(asset.total_pnl) }}
+                                    </td>
+                                    <td :class="['py-4 px-4 text-right font-semibold', asset.total_pnl_percent >= 0 ? 'text-emerald-300' : 'text-red-300']">
+                                        {{ formatPercent(asset.total_pnl_percent) }}
+                                    </td>
+                                    <td class="py-4 pl-4 text-right">
+                                        <button
+                                            @click="hideAsset(asset.ticker)"
+                                            class="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:border-red-400 hover:text-red-300"
+                                            title="Скрыть актив из таблицы без удаления операций и без изменения статистики"
+                                        >
+                                            Скрыть
+                                        </button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="surface rounded-2xl p-5">
+                    <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-5">
+                        <div>
+                            <h2 class="text-xl font-bold text-white">Банковские вклады</h2>
+                            <p class="text-sm text-slate-400">Начисленная прибыль зависит от выбранного графика начисления</p>
+                        </div>
+                        <div class="soft rounded-xl px-4 py-3 text-sm">
+                            <span class="text-slate-400">Ожидаемая прибыль:</span>
+                            <span class="ml-2 font-bold text-emerald-300">{{ formatRub(dashboard.total_deposits_expected_profit) }}</span>
+                        </div>
+                    </div>
+
+                    <div v-if="dashboard.deposits.length === 0" class="soft rounded-xl p-8 text-center text-slate-400">
+                        Нет активных вкладов.
+                    </div>
+
+                    <div v-else class="overflow-x-auto">
+                        <table class="w-full min-w-[980px] text-sm">
+                            <thead>
+                                <tr class="border-b border-slate-700 text-slate-400">
+                                    <th class="py-3 pr-4 text-left font-semibold">Банк</th>
+                                    <th class="py-3 px-4 text-right font-semibold">Сумма</th>
+                                    <th class="py-3 px-4 text-right font-semibold">Ставка</th>
+                                    <th class="py-3 px-4 text-left font-semibold">Начисление</th>
+                                    <th class="py-3 px-4 text-right font-semibold">Начислено</th>
+                                    <th class="py-3 px-4 text-right font-semibold">К концу срока</th>
+                                    <th class="py-3 px-4 text-right font-semibold">Текущая стоимость</th>
+                                    <th class="py-3 pl-4 text-right font-semibold">Осталось</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="deposit in dashboard.deposits" :key="deposit.id" class="table-row border-b border-slate-800">
+                                    <td class="py-4 pr-4 font-semibold">{{ deposit.bank_name }}</td>
+                                    <td class="py-4 px-4 text-right">{{ formatRub(deposit.amount) }}</td>
+                                    <td class="py-4 px-4 text-right text-amber-300 font-semibold">{{ formatPercent(deposit.apy_percent) }}</td>
+                                    <td class="py-4 px-4 text-slate-300">{{ paymentTypeLabel(deposit.interest_payment_type) }}</td>
+                                    <td class="py-4 px-4 text-right text-emerald-300 font-bold">{{ formatRub(deposit.accrued_profit) }}</td>
+                                    <td class="py-4 px-4 text-right">{{ formatRub(deposit.expected_profit) }}</td>
+                                    <td class="py-4 px-4 text-right font-semibold">{{ formatRub(deposit.current_value) }}</td>
+                                    <td :class="['py-4 pl-4 text-right', deposit.days_remaining <= 30 ? 'text-orange-300 font-semibold' : 'text-slate-300']">
+                                        {{ deposit.days_remaining }} дн.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </template>
+
+            <div v-if="showTransactionModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+                <div class="surface max-w-lg w-full rounded-2xl p-5">
+                    <div class="mb-5 flex items-start justify-between gap-4">
+                        <div>
+                            <h3 class="text-xl font-bold">Новая операция</h3>
+                            <p class="text-sm text-slate-400">Цена инструмента подтягивается с Мосбиржи автоматически</p>
+                        </div>
+                        <button @click="showTransactionModal = false" class="btn btn-secondary px-3 py-2">×</button>
+                    </div>
+
+                    <div class="space-y-4">
+                        <label class="block">
+                            <span class="mb-2 block text-sm font-medium text-slate-300">Дата</span>
+                            <input v-model="newTransaction.date" type="datetime-local" class="field">
+                        </label>
+
+                        <label class="block">
+                            <span class="mb-2 block text-sm font-medium text-slate-300">Тип операции</span>
+                            <select v-model="newTransaction.type" class="field">
+                                <option value="">Выберите тип</option>
+                                <option value="deposit_fiat">Пополнить счёт</option>
+                                <option value="withdraw_fiat">Вывести со счёта</option>
+                                <option value="buy_asset">Купить акцию или фонд</option>
+                                <option value="sell_asset">Продать акцию или фонд</option>
+                            </select>
+                        </label>
+
+                        <div v-if="isAssetOperation">
+                            <label class="block">
+                                <span class="mb-2 block text-sm font-medium text-slate-300">Тикер</span>
+                                <input
+                                    v-model.trim="newTransaction.ticker"
+                                    @input="searchStocks"
+                                    type="text"
+                                    placeholder="Например: SBER, SBGD, LQDT"
+                                    class="field uppercase"
+                                >
+                            </label>
+                            <div v-if="stockSearchResults.length > 0" class="mt-2 max-h-52 overflow-y-auto rounded-xl border border-slate-700 bg-slate-950">
+                                <button
+                                    v-for="stock in stockSearchResults"
+                                    :key="stock.ticker"
+                                    @click="selectStock(stock.ticker)"
+                                    class="block w-full border-b border-slate-800 px-4 py-3 text-left hover:bg-slate-800"
+                                >
+                                    <span class="font-bold text-cyan-300">{{ stock.ticker }}</span>
+                                    <span class="ml-2 text-sm text-slate-400">{{ stock.name }}</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <label v-if="isAssetOperation" class="block">
+                            <span class="mb-2 block text-sm font-medium text-slate-300">Количество</span>
+                            <input v-model.number="newTransaction.quantity" type="number" step="0.0001" min="0" class="field">
+                        </label>
+
+                        <div v-if="isAssetOperation" class="soft rounded-xl p-4 text-sm text-slate-300">
+                            Сумма сделки будет рассчитана автоматически по свежей цене Мосбиржи и количеству бумаг.
+                        </div>
+
+                        <label v-else class="block">
+                            <span class="mb-2 block text-sm font-medium text-slate-300">
+                                Сумма
+                            </span>
+                            <input v-model.number="newTransaction.total_amount" type="number" step="0.01" min="0" class="field">
+                        </label>
+                    </div>
+
+                    <div class="mt-6 grid grid-cols-2 gap-3">
+                        <button @click="submitTransaction" class="btn btn-primary">Сохранить</button>
+                        <button @click="showTransactionModal = false" class="btn btn-secondary">Отмена</button>
+                    </div>
+                </div>
+            </div>
+
+            <div v-if="showDepositModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+                <div class="surface max-w-lg w-full rounded-2xl p-5">
+                    <div class="mb-5 flex items-start justify-between gap-4">
+                        <div>
+                            <h3 class="text-xl font-bold">Новый вклад</h3>
+                            <p class="text-sm text-slate-400">Прибыль рассчитывается по сумме, ставке, сроку и графику начисления</p>
+                        </div>
+                        <button @click="showDepositModal = false" class="btn btn-secondary px-3 py-2">×</button>
+                    </div>
+
+                    <div class="space-y-4">
+                        <label class="block">
+                            <span class="mb-2 block text-sm font-medium text-slate-300">Банк</span>
+                            <input v-model.trim="newDeposit.bank_name" type="text" class="field">
+                        </label>
+
+                        <label class="block">
+                            <span class="mb-2 block text-sm font-medium text-slate-300">Сумма вклада</span>
+                            <input v-model.number="newDeposit.amount" type="number" step="0.01" min="0" class="field">
+                        </label>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <label class="block">
+                                <span class="mb-2 block text-sm font-medium text-slate-300">Дата начала</span>
+                                <input v-model="newDeposit.start_date" type="date" class="field">
+                            </label>
+
+                            <label class="block">
+                                <span class="mb-2 block text-sm font-medium text-slate-300">Дата окончания</span>
+                                <input v-model="newDeposit.end_date" type="date" class="field">
+                            </label>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <label class="block">
+                                <span class="mb-2 block text-sm font-medium text-slate-300">Ставка годовых</span>
+                                <input v-model.number="newDeposit.apy_percent" type="number" step="0.01" min="0" class="field">
+                            </label>
+
+                            <label class="block">
+                                <span class="mb-2 block text-sm font-medium text-slate-300">Начисление</span>
+                                <select v-model="newDeposit.interest_payment_type" class="field">
+                                    <option value="at_end">В конце срока</option>
+                                    <option value="monthly">Ежемесячно</option>
+                                    <option value="daily">Ежедневно</option>
+                                    <option value="upfront">Сразу</option>
+                                </select>
+                            </label>
+                        </div>
+
+                        <div class="soft rounded-xl p-4 text-sm">
+                            <div class="flex justify-between gap-4">
+                                <span class="text-slate-400">Срок</span>
+                                <span class="font-semibold">{{ depositTermDays }} дн.</span>
+                            </div>
+                            <div class="mt-2 flex justify-between gap-4">
+                                <span class="text-slate-400">Ожидаемая прибыль</span>
+                                <span class="font-semibold text-emerald-300">{{ formatRub(depositPreviewProfit) }}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-6 grid grid-cols-2 gap-3">
+                        <button @click="submitDeposit" class="btn btn-primary">Сохранить</button>
+                        <button @click="showDepositModal = false" class="btn btn-secondary">Отмена</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+
+        createApp({
+            data() {
+                return {
+                    dashboard: {
+                        total_capital: 0,
+                        total_portfolio_value: 0,
+                        total_assets_value: 0,
+                        total_invested_in_assets: 0,
+                        total_assets_pnl: 0,
+                        total_assets_pnl_percent: 0,
+                        total_in_deposits: 0,
+                        total_deposits_principal: 0,
+                        total_deposits_accrued_profit: 0,
+                        total_deposits_expected_profit: 0,
+                        total_unrealized_pnl: 0,
+                        total_unrealized_pnl_percent: 0,
+                        cash_balance: 0,
+                        assets: [],
+                        deposits: []
+                    },
+                    history: [],
+                    loading: true,
+                    error: null,
+                    showTransactionModal: false,
+                    showDepositModal: false,
+                    stockSearchResults: [],
+                    chart: null,
+                    searchTimer: null,
+                    newTransaction: {
+                        date: new Date().toISOString().slice(0, 16),
+                        type: '',
+                        ticker: '',
+                        quantity: null,
+                        total_amount: 0
+                    },
+                    newDeposit: {
+                        bank_name: '',
+                        amount: 0,
+                        start_date: new Date().toISOString().slice(0, 10),
+                        end_date: '',
+                        apy_percent: 0,
+                        interest_payment_type: 'at_end'
+                    }
+                };
+            },
+            computed: {
+                isAssetOperation() {
+                    return ['buy_asset', 'sell_asset'].includes(this.newTransaction.type);
+                },
+                depositTermDays() {
+                    if (!this.newDeposit.start_date || !this.newDeposit.end_date) return 0;
+                    const start = new Date(this.newDeposit.start_date);
+                    const end = new Date(this.newDeposit.end_date);
+                    return Math.max(Math.round((end - start) / 86400000), 0);
+                },
+                depositPreviewProfit() {
+                    const amount = Number(this.newDeposit.amount || 0);
+                    const apy = Number(this.newDeposit.apy_percent || 0);
+                    return amount * (apy / 100) * this.depositTermDays / 365;
+                }
+            },
+            async mounted() {
+                this.initChart();
+                await this.refreshAll();
+
+                setInterval(() => {
+                    this.refreshAll(false);
+                }, 30000);
+            },
+            methods: {
+                formatRub(value) {
+                    return new Intl.NumberFormat('ru-RU', {
+                        style: 'currency',
+                        currency: 'RUB',
+                        minimumFractionDigits: 0,
+                        maximumFractionDigits: 2
+                    }).format(Number(value || 0));
+                },
+                signedRub(value) {
+                    const number = Number(value || 0);
+                    return `${number >= 0 ? '+' : ''}${this.formatRub(number)}`;
+                },
+                formatPercent(value) {
+                    return `${Number(value || 0).toFixed(2)}%`;
+                },
+                formatNumber(value, digits = 2) {
+                    return new Intl.NumberFormat('ru-RU', {
+                        minimumFractionDigits: 0,
+                        maximumFractionDigits: digits
+                    }).format(Number(value || 0));
+                },
+                paymentTypeLabel(value) {
+                    return {
+                        daily: 'Ежедневно',
+                        monthly: 'Ежемесячно',
+                        at_end: 'В конце срока',
+                        upfront: 'Сразу'
+                    }[value] || 'В конце срока';
+                },
+                openTransactionModal() {
+                    this.error = null;
+                    this.showTransactionModal = true;
+                },
+                openDepositModal() {
+                    this.error = null;
+                    this.showDepositModal = true;
+                },
+                async refreshAll(showLoader = true) {
+                    if (showLoader) this.loading = true;
+                    await this.fetchDashboard();
+                    await this.fetchHistory();
+                    this.loading = false;
+                },
+                async fetchDashboard() {
+                    try {
+                        this.error = null;
+                        const response = await fetch('/api/dashboard');
+                        const data = await response.json();
+                        if (!response.ok) throw new Error(data.detail || 'Не удалось загрузить портфель');
+                        this.dashboard = data;
+                    } catch (error) {
+                        this.error = error.message;
+                    }
+                },
+                async fetchHistory() {
+                    try {
+                        const response = await fetch('/api/history');
+                        const data = await response.json();
+                        if (!response.ok) throw new Error(data.detail || 'Не удалось загрузить историю');
+                        this.history = data;
+                        this.updateChart();
+                    } catch (error) {
+                        console.error(error);
+                    }
+                },
+                async submitTransaction() {
+                    try {
+                        this.error = null;
+
+                        if (!this.newTransaction.type) throw new Error('Выберите тип операции.');
+                        if (this.isAssetOperation && !this.newTransaction.ticker) throw new Error('Укажите тикер.');
+                        if (this.isAssetOperation && (!this.newTransaction.quantity || this.newTransaction.quantity <= 0)) {
+                            throw new Error('Количество должно быть больше нуля.');
+                        }
+                        if (!this.isAssetOperation && (!this.newTransaction.total_amount || this.newTransaction.total_amount <= 0)) {
+                            throw new Error('Сумма должна быть больше нуля.');
+                        }
+
+                        const payload = {
+                            date: new Date(this.newTransaction.date).toISOString(),
+                            type: this.newTransaction.type,
+                            ticker: this.isAssetOperation ? this.newTransaction.ticker.toUpperCase() : null,
+                            quantity: this.isAssetOperation ? this.newTransaction.quantity : null,
+                            total_amount: this.isAssetOperation ? null : this.newTransaction.total_amount
+                        };
+
+                        const response = await fetch('/api/transactions', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        const data = await response.json();
+                        if (!response.ok) throw new Error(data.detail || 'Не удалось сохранить операцию');
+
+                        this.showTransactionModal = false;
+                        this.stockSearchResults = [];
+                        this.newTransaction = {
+                            date: new Date().toISOString().slice(0, 16),
+                            type: '',
+                            ticker: '',
+                            quantity: null,
+                            total_amount: 0
+                        };
+                        await this.refreshAll(false);
+                    } catch (error) {
+                        this.error = error.message;
+                    }
+                },
+                async submitDeposit() {
+                    try {
+                        this.error = null;
+
+                        if (!this.newDeposit.bank_name) throw new Error('Укажите банк.');
+                        if (!this.newDeposit.amount || this.newDeposit.amount <= 0) throw new Error('Сумма вклада должна быть больше нуля.');
+                        if (!this.newDeposit.start_date || !this.newDeposit.end_date) throw new Error('Укажите даты вклада.');
+                        if (this.depositTermDays <= 0) throw new Error('Дата окончания должна быть позже даты начала.');
+
+                        const payload = {
+                            bank_name: this.newDeposit.bank_name,
+                            amount: this.newDeposit.amount,
+                            start_date: this.newDeposit.start_date,
+                            end_date: this.newDeposit.end_date,
+                            apy_percent: this.newDeposit.apy_percent,
+                            interest_payment_type: this.newDeposit.interest_payment_type
+                        };
+
+                        const response = await fetch('/api/bank-deposits', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        const data = await response.json();
+                        if (!response.ok) throw new Error(data.detail || 'Не удалось сохранить вклад');
+
+                        this.showDepositModal = false;
+                        this.newDeposit = {
+                            bank_name: '',
+                            amount: 0,
+                            start_date: new Date().toISOString().slice(0, 10),
+                            end_date: '',
+                            apy_percent: 0,
+                            interest_payment_type: 'at_end'
+                        };
+                        await this.refreshAll(false);
+                    } catch (error) {
+                        this.error = error.message;
+                    }
+                },
+                async hideAsset(ticker) {
+                    try {
+                        this.error = null;
+                        const confirmed = window.confirm(
+                            `Скрыть ${ticker} из таблицы? Операции, прибыль и общая статистика не изменятся.`
+                        );
+                        if (!confirmed) return;
+
+                        const response = await fetch(`/api/assets/${encodeURIComponent(ticker)}`, {
+                            method: 'DELETE'
+                        });
+                        const data = await response.json();
+                        if (!response.ok) throw new Error(data.detail || 'Не удалось скрыть актив');
+
+                        await this.refreshAll(false);
+                    } catch (error) {
+                        this.error = error.message;
+                    }
+                },
+                async searchStocks() {
+                    clearTimeout(this.searchTimer);
+                    const query = this.newTransaction.ticker.trim();
+                    if (!query) {
+                        this.stockSearchResults = [];
+                        return;
+                    }
+
+                    this.searchTimer = setTimeout(async () => {
+                        try {
+                            const response = await fetch(`/api/stocks/search?q=${encodeURIComponent(query)}`);
+                            this.stockSearchResults = response.ok ? await response.json() : [];
+                        } catch (error) {
+                            console.error(error);
+                            this.stockSearchResults = [];
+                        }
+                    }, 250);
+                },
+                selectStock(ticker) {
+                    this.newTransaction.ticker = ticker;
+                    this.stockSearchResults = [];
+                },
+                initChart() {
+                    const canvas = document.getElementById('portfolioChart');
+                    if (!canvas) return;
+                    if (typeof Chart === 'undefined') {
+                        this.error = 'Chart.js не загрузился. Проверьте интернет-доступ к CDN или подключите библиотеку локально.';
+                        return;
+                    }
+
+                    this.chart = new Chart(canvas, {
+                        type: 'line',
+                        data: {
+                            labels: [],
+                            datasets: [{
+                                label: 'Стоимость портфеля',
+                                data: [],
+                                borderColor: '#22d3ee',
+                                backgroundColor: 'rgba(34, 211, 238, 0.12)',
+                                pointBackgroundColor: '#22d3ee',
+                                pointBorderColor: '#0f172a',
+                                pointBorderWidth: 2,
+                                pointRadius: 4,
+                                fill: true,
+                                tension: 0.32,
+                                borderWidth: 3
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            interaction: {
+                                intersect: false,
+                                mode: 'index'
+                            },
+                            plugins: {
+                                legend: {
+                                    labels: { color: '#cbd5e1' }
+                                },
+                                tooltip: {
+                                    callbacks: {
+                                        label: (context) => ` ${this.formatRub(context.parsed.y)}`
+                                    }
+                                }
+                            },
+                            scales: {
+                                x: {
+                                    ticks: { color: '#94a3b8' },
+                                    grid: { color: 'rgba(148, 163, 184, 0.08)' }
+                                },
+                                y: {
+                                    beginAtZero: true,
+                                    ticks: {
+                                        color: '#94a3b8',
+                                        callback: (value) => this.formatRub(value)
+                                    },
+                                    grid: { color: 'rgba(148, 163, 184, 0.1)' }
+                                }
+                            }
+                        }
+                    });
+                },
+                updateChart() {
+                    if (!this.chart) return;
+
+                    this.chart.data.labels = this.history.map((item) => {
+                        const value = new Date(`${item.date}T00:00:00`);
+                        return value.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' });
+                    });
+                    this.chart.data.datasets[0].data = this.history.map((item) => Number(item.total_value || 0));
+                    this.chart.update();
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
