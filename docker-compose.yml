@@ -1,0 +1,22 @@
+services:
+  portfolio-tracker:
+    build: .
+    container_name: portfolio-tracker
+    ports:
+      - "8000:8000"
+    volumes:
+      - portfolio-data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:////app/data/portfolio.db
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    networks:
+      - portfolio-network
+
+volumes:
+  portfolio-data:
+    driver: local
+
+networks:
+  portfolio-network:
+    driver: bridge
