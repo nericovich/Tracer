@@ -3,12 +3,13 @@ services:
     build: .
     container_name: portfolio-tracker
     ports:
-      - "8000:8000"
+      - "${PORT:-8000}:8000"
     volumes:
       - portfolio-data:/app/data
     environment:
       - DATABASE_URL=sqlite:////app/data/portfolio.db
       - PYTHONUNBUFFERED=1
+      - SECRET_KEY=${SECRET_KEY:-change-me-to-a-random-string}
     restart: unless-stopped
     networks:
       - portfolio-network
