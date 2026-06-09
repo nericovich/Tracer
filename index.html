@@ -6,47 +6,72 @@
     <title>Трекер портфеля</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script>
+        // Disable datalabels globally; enable per-chart where needed
+        if (typeof ChartDataLabels !== 'undefined') {
+            Chart.defaults.set('plugins.datalabels', { display: false });
+        }
+    </script>
     <style>
         body {
             background:
-                radial-gradient(circle at top left, rgba(37, 99, 235, 0.18), transparent 28rem),
-                radial-gradient(circle at top right, rgba(16, 185, 129, 0.12), transparent 24rem),
-                #0f172a;
+                radial-gradient(ellipse at 10% 0%, rgba(99, 102, 241, 0.12) 0%, transparent 50%),
+                radial-gradient(ellipse at 90% 5%, rgba(6, 182, 212, 0.10) 0%, transparent 40%),
+                radial-gradient(ellipse at 50% 80%, rgba(139, 92, 246, 0.06) 0%, transparent 50%),
+                linear-gradient(180deg, #0a0f1e 0%, #0f172a 40%, #0c1220 100%);
+            min-height: 100vh;
         }
 
         .surface {
-            background: rgba(15, 23, 42, 0.82);
-            border: 1px solid rgba(148, 163, 184, 0.16);
-            box-shadow: 0 18px 50px rgba(2, 6, 23, 0.28);
-            backdrop-filter: blur(18px);
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.88) 0%, rgba(22, 33, 55, 0.82) 100%);
+            border: 1px solid rgba(148, 163, 184, 0.10);
+            box-shadow: 0 20px 60px rgba(2, 6, 23, 0.35), inset 0 1px 0 rgba(148, 163, 184, 0.05);
+            backdrop-filter: blur(20px);
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .surface:hover {
+            border-color: rgba(148, 163, 184, 0.16);
+            box-shadow: 0 24px 70px rgba(2, 6, 23, 0.40), inset 0 1px 0 rgba(148, 163, 184, 0.08);
         }
 
         .soft {
-            background: rgba(30, 41, 59, 0.64);
-            border: 1px solid rgba(148, 163, 184, 0.14);
+            background: rgba(30, 41, 59, 0.55);
+            border: 1px solid rgba(148, 163, 184, 0.10);
+            transition: border-color 0.2s ease;
+        }
+
+        .soft:hover {
+            border-color: rgba(148, 163, 184, 0.18);
         }
 
         .field {
             width: 100%;
             border-radius: 0.75rem;
-            border: 1px solid rgba(148, 163, 184, 0.22);
-            background: rgba(15, 23, 42, 0.84);
-            color: #f8fafc;
-            padding: 0.7rem 0.9rem;
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            background: rgba(15, 23, 42, 0.90);
+            color: #f1f5f9;
+            padding: 0.7rem 1rem;
             outline: none;
+            font-size: 0.875rem;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
         }
 
         .field:focus {
-            border-color: #38bdf8;
-            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
+            border-color: #6366f1;
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
         }
 
         .btn {
             border-radius: 0.75rem;
-            padding: 0.7rem 1rem;
-            font-weight: 700;
-            transition: transform 0.15s ease, background 0.15s ease, border 0.15s ease;
+            padding: 0.65rem 1.2rem;
+            font-weight: 600;
+            font-size: 0.875rem;
+            letter-spacing: 0.01em;
+            transition: all 0.2s ease;
+            cursor: pointer;
         }
 
         .btn:active {
@@ -54,143 +79,325 @@
         }
 
         .btn-primary {
-            background: linear-gradient(135deg, #2563eb, #0891b2);
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
             color: white;
+            border: none;
+            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.25);
         }
 
         .btn-primary:hover {
-            background: linear-gradient(135deg, #1d4ed8, #0e7490);
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            box-shadow: 0 6px 20px rgba(99, 102, 241, 0.35);
+            transform: translateY(-1px);
         }
 
         .btn-secondary {
-            background: rgba(51, 65, 85, 0.82);
+            background: rgba(51, 65, 85, 0.65);
             color: #e2e8f0;
-            border: 1px solid rgba(148, 163, 184, 0.18);
+            border: 1px solid rgba(148, 163, 184, 0.14);
         }
 
         .btn-secondary:hover {
-            background: rgba(71, 85, 105, 0.88);
+            background: rgba(71, 85, 105, 0.75);
+            border-color: rgba(148, 163, 184, 0.22);
+        }
+
+        .stat-card {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            border-radius: 1rem 1rem 0 0;
+        }
+
+        .stat-card-blue::before { background: linear-gradient(90deg, #6366f1, #8b5cf6); }
+        .stat-card-cyan::before { background: linear-gradient(90deg, #06b6d4, #22d3ee); }
+        .stat-card-amber::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+
+        .table-row {
+            transition: background 0.2s ease;
         }
 
         .table-row:hover {
-            background: rgba(51, 65, 85, 0.38);
+            background: rgba(99, 102, 241, 0.06);
         }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1.25rem;
+        }
+
+        .section-header::before {
+            content: '';
+            width: 3px;
+            height: 1.25rem;
+            border-radius: 2px;
+            background: linear-gradient(180deg, #6366f1, #8b5cf6);
+            flex-shrink: 0;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.2rem 0.6rem;
+            border-radius: 9999px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+
+        .badge-success { background: rgba(16, 185, 129, 0.12); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.15); }
+        .badge-danger { background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.15); }
+        .badge-info { background: rgba(99, 102, 241, 0.12); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.15); }
+
+        .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+        .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+        .scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.2); border-radius: 3px; }
+        .scrollbar-thin::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.35); }
+
+        .auth-overlay {
+            position: fixed; inset: 0; z-index: 100;
+            display: flex; align-items: center; justify-content: center;
+            background:
+                radial-gradient(ellipse at 20% 10%, rgba(99, 102, 241, 0.18) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 5%, rgba(6, 182, 212, 0.14) 0%, transparent 40%),
+                radial-gradient(ellipse at 50% 90%, rgba(139, 92, 246, 0.08) 0%, transparent 50%),
+                linear-gradient(180deg, #080d1a 0%, #0f172a 40%, #0a1020 100%);
+        }
+
+        .auth-card {
+            width: 100%; max-width: 400px;
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.92) 0%, rgba(22, 33, 55, 0.88) 100%);
+            border: 1px solid rgba(148, 163, 184, 0.12);
+            border-radius: 1.5rem;
+            box-shadow: 0 30px 80px rgba(2, 6, 23, 0.5), inset 0 1px 0 rgba(148, 163, 184, 0.06);
+            backdrop-filter: blur(24px);
+            padding: 2.5rem;
+        }
+
+        .auth-tabs { display: flex; gap: 0; border-bottom: 1px solid rgba(148, 163, 184, 0.12); margin-bottom: 1.5rem; }
+        .auth-tab {
+            flex: 1; padding: 0.75rem 0; text-align: center; font-size: 0.875rem; font-weight: 600;
+            color: #64748b; cursor: pointer; border-bottom: 2px solid transparent;
+            transition: color 0.2s, border-color 0.2s;
+        }
+        .auth-tab.active { color: #a5b4fc; border-bottom-color: #6366f1; }
+        .auth-tab:hover:not(.active) { color: #94a3b8; }
     </style>
 </head>
 <body class="text-slate-100 antialiased">
     <div id="app" class="min-h-screen">
-        <header class="border-b border-slate-800/80 bg-slate-950/70">
-            <div class="max-w-7xl mx-auto px-5 py-6">
+        <!-- Auth Overlay -->
+        <div v-if="!isAuthenticated" class="auth-overlay">
+            <div class="auth-card">
+                <div class="text-center mb-6">
+                    <p class="text-xs uppercase tracking-[0.3em] font-semibold text-indigo-400/80">Portfolio Tracker</p>
+                    <h1 class="mt-2 text-2xl font-bold bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent">Трекер портфеля</h1>
+                </div>
+
+                <div class="auth-tabs">
+                    <button class="auth-tab" :class="{ active: authMode === 'login' }" @click="authMode = 'login'">Вход</button>
+                    <button class="auth-tab" :class="{ active: authMode === 'register' }" @click="authMode = 'register'">Регистрация</button>
+                </div>
+
+                <div v-if="authError" class="mb-4 rounded-xl border border-red-500/20 bg-red-950/40 px-4 py-2.5 text-red-300 text-sm">
+                    {{ authError }}
+                </div>
+
+                <div class="space-y-4">
+                    <label class="block">
+                        <span class="mb-2 block text-sm font-medium text-slate-400">Имя пользователя</span>
+                        <input v-model.trim="authUsername" type="text" placeholder="admin" class="field" @keyup.enter="submitAuth">
+                    </label>
+                    <label class="block">
+                        <span class="mb-2 block text-sm font-medium text-slate-400">Пароль</span>
+                        <input v-model="authPassword" type="password" placeholder="••••" class="field" @keyup.enter="submitAuth">
+                    </label>
+                </div>
+
+                <button @click="submitAuth" :disabled="isAuthenticating" class="btn btn-primary w-full mt-6">
+                    <span v-if="isAuthenticating">Подождите...</span>
+                    <span v-else-if="authMode === 'login'">Войти</span>
+                    <span v-else>Зарегистрироваться</span>
+                </button>
+
+                <p class="mt-4 text-center text-xs text-slate-600">
+                    Данные хранятся на сервере. По умолчанию: admin / admin
+                </p>
+            </div>
+        </div>
+
+        <!-- Main App (only visible when authenticated) -->
+        <template v-if="isAuthenticated">
+        <header class="border-b border-slate-800/50 bg-slate-950/50 backdrop-blur-xl sticky top-0 z-40">
+            <div class="max-w-7xl mx-auto px-5 py-5">
                 <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                     <div>
-                        <p class="text-sm uppercase tracking-[0.22em] text-cyan-300/80">Личный капитал</p>
-                        <h1 class="mt-2 text-3xl md:text-4xl font-bold text-white">Трекер портфеля</h1>
-                        <p class="mt-2 text-slate-400">Российские акции, фонды Мосбиржи и банковские вклады в рублях</p>
+                        <p class="text-xs uppercase tracking-[0.25em] font-semibold text-indigo-400/80">Portfolio Tracker</p>
+                        <h1 class="mt-1.5 text-2xl md:text-3xl font-bold bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent">Трекер портфеля</h1>
                     </div>
-                    <div class="flex flex-wrap gap-3">
-                        <button @click="openTransactionModal" class="btn btn-primary">Добавить операцию</button>
-                        <button @click="openDepositModal" class="btn btn-secondary">Добавить вклад</button>
+                    <div class="flex flex-wrap gap-2.5">
+                        <button @click="refreshAll(true, true)" :disabled="isRefreshing" class="btn btn-secondary text-xs">
+                            <span v-if="isRefreshing">⟳ Обновляю...</span>
+                            <span v-else>⟳ Обновить</span>
+                        </button>
+                        <button @click="openTransactionModal" class="btn btn-primary text-xs">+ Операция</button>
+                        <button @click="openDepositModal" class="btn btn-secondary text-xs">+ Вклад</button>
+                        <span class="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-1.5 text-xs text-slate-400">
+                            {{ currentUsername }}
+                            <button @click="logout" class="text-slate-500 hover:text-red-400 transition-colors" title="Выйти">✕</button>
+                        </span>
                     </div>
                 </div>
             </div>
         </header>
 
         <main class="max-w-7xl mx-auto px-5 py-7">
-            <div v-if="error" class="mb-5 rounded-xl border border-red-500/30 bg-red-950/60 px-4 py-3 text-red-100">
-                {{ error }}
+            <div v-if="error" class="mb-5 rounded-xl border border-red-500/20 bg-red-950/40 px-4 py-3 text-red-300 text-sm flex items-center gap-2">
+                <span class="text-red-400">⚠</span> {{ error }}
             </div>
 
-            <div v-if="loading" class="surface rounded-2xl p-10 text-center text-slate-300">
-                Загружаю портфель...
+            <div v-show="loading" class="surface rounded-2xl p-12 text-center">
+                <div class="inline-block animate-spin rounded-full h-8 w-8 border-2 border-indigo-400 border-t-transparent mb-3"></div>
+                <p class="text-slate-400 text-sm">Загружаю портфель...</p>
             </div>
 
-            <template v-else>
-                <section class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-                    <div class="surface rounded-2xl p-5">
-                        <p class="text-sm text-slate-400">Общий капитал</p>
-                        <p class="mt-3 text-3xl font-bold text-white">{{ formatRub(dashboard.total_portfolio_value) }}</p>
-                        <p :class="['mt-3 text-sm font-semibold', dashboard.total_unrealized_pnl >= 0 ? 'text-emerald-300' : 'text-red-300']">
-                            {{ signedRub(dashboard.total_unrealized_pnl) }}
-                            <span class="font-normal text-slate-400">({{ formatPercent(dashboard.total_unrealized_pnl_percent) }})</span>
-                        </p>
+            <div v-show="!loading">
+                <section class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div class="surface rounded-2xl p-5 stat-card stat-card-blue">
+                        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Общий капитал</p>
+                        <p class="mt-3 text-3xl font-bold text-white tracking-tight">{{ formatRub(dashboard.total_portfolio_value) }}</p>
+                        <div class="mt-3 flex items-center gap-2">
+                            <span :class="['badge', dashboard.total_unrealized_pnl >= 0 ? 'badge-success' : 'badge-danger']">
+                                {{ signedRub(dashboard.total_unrealized_pnl) }}
+                            </span>
+                            <span class="text-xs text-slate-500">{{ formatPercent(dashboard.total_unrealized_pnl_percent) }}</span>
+                        </div>
                     </div>
 
-                    <div class="surface rounded-2xl p-5">
-                        <p class="text-sm text-slate-400">Акции и фонды</p>
-                        <p class="mt-3 text-3xl font-bold text-cyan-300">{{ formatRub(dashboard.total_assets_value) }}</p>
-                        <p class="mt-3 text-sm text-slate-400">
-                            Себестоимость: {{ formatRub(dashboard.total_invested_in_assets) }}
-                        </p>
+                    <div class="surface rounded-2xl p-5 stat-card stat-card-cyan">
+                        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Акции и фонды</p>
+                        <p class="mt-3 text-3xl font-bold text-cyan-300 tracking-tight">{{ formatRub(dashboard.total_assets_value) }}</p>
+                        <p class="mt-2 text-xs text-slate-500">Себестоимость: {{ formatRub(dashboard.total_invested_in_assets) }}</p>
+                        <div class="mt-2 grid grid-cols-2 gap-2">
+                            <div class="soft rounded-lg px-2.5 py-1.5">
+                                <p class="text-[10px] uppercase tracking-wider text-slate-500">День</p>
+                                <p :class="['text-xs font-semibold', dashboard.assets_change_1d >= 0 ? 'text-emerald-400' : 'text-red-400']">
+                                    {{ signedRub(dashboard.assets_change_1d) }}
+                                    <span class="font-normal text-slate-500">({{ signedPercent(dashboard.assets_change_1d_percent) }})</span>
+                                </p>
+                            </div>
+                            <div class="soft rounded-lg px-2.5 py-1.5">
+                                <p class="text-[10px] uppercase tracking-wider text-slate-500">Месяц</p>
+                                <p :class="['text-xs font-semibold', dashboard.assets_change_1m >= 0 ? 'text-emerald-400' : 'text-red-400']">
+                                    {{ signedRub(dashboard.assets_change_1m) }}
+                                    <span class="font-normal text-slate-500">({{ signedPercent(dashboard.assets_change_1m_percent) }})</span>
+                                </p>
+                            </div>
+                        </div>
                     </div>
 
+                    <div class="surface rounded-2xl p-5 stat-card stat-card-amber">
+                        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Банковские вклады</p>
+                        <p class="mt-3 text-3xl font-bold text-amber-300 tracking-tight">{{ formatRub(dashboard.total_in_deposits) }}</p>
+                        <div class="mt-3 flex items-center gap-2">
+                            <span class="badge badge-success">+ {{ formatRub(dashboard.total_deposits_accrued_profit) }}</span>
+                            <span class="text-xs text-slate-500">начислено</span>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                     <div class="surface rounded-2xl p-5">
-                        <p class="text-sm text-slate-400">Банковские вклады</p>
-                        <p class="mt-3 text-3xl font-bold text-amber-300">{{ formatRub(dashboard.total_in_deposits) }}</p>
-                        <p class="mt-3 text-sm text-emerald-300">
-                            Начислено: {{ formatRub(dashboard.total_deposits_accrued_profit) }}
+                        <div class="section-header"><h2 class="text-base font-bold text-white">Распределение акций</h2></div>
+                        <div class="h-64 relative">
+                            <canvas id="stockAllocationChart"></canvas>
+                        </div>
+                        <p v-if="dashboard.assets.length === 0" class="mt-2 text-center text-xs text-slate-500">
+                            Нет открытых позиций
                         </p>
                     </div>
-
                     <div class="surface rounded-2xl p-5">
-                        <p class="text-sm text-slate-400">Свободные деньги</p>
-                        <p class="mt-3 text-3xl font-bold text-emerald-300">{{ formatRub(dashboard.cash_balance) }}</p>
-                        <p class="mt-3 text-sm text-slate-400">
-                            Не вложены в акции или вклады
-                        </p>
+                        <div class="section-header"><h2 class="text-base font-bold text-white">Структура капитала</h2></div>
+                        <div class="h-64 relative">
+                            <canvas id="allocationChart"></canvas>
+                        </div>
                     </div>
                 </section>
 
                 <section class="surface rounded-2xl p-5 mb-6">
                     <div class="flex flex-col gap-2 md:flex-row md:items-end md:justify-between mb-4">
-                        <div>
-                            <h2 class="text-xl font-bold text-white">История стоимости портфеля</h2>
-                            <p class="text-sm text-slate-400">График учитывает акции, вклады с начисленной прибылью и свободные деньги</p>
+                        <div class="section-header">
+                            <h2 class="text-base font-bold text-white">История стоимости портфеля</h2>
                         </div>
-                        <button @click="refreshAll" class="btn btn-secondary text-sm">Обновить</button>
+                        <p v-if="pricesUpdatedAt" class="text-xs text-slate-500 flex items-center gap-1.5">
+                            <span class="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+                            Обновлены: {{ formatDateTime(pricesUpdatedAt) }} МСК
+                        </p>
                     </div>
+                    <p class="text-xs text-slate-500 mb-3">График учитывает акции, вклады с начисленной прибылью и нераспределённые средства</p>
                     <div class="h-80">
                         <canvas id="portfolioChart"></canvas>
                     </div>
-                    <p v-if="history.length === 0" class="mt-4 text-center text-sm text-slate-400">
+                    <p v-if="history.length === 0" class="mt-4 text-center text-xs text-slate-500">
                         История появится после первой операции или вклада.
                     </p>
                 </section>
 
                 <section class="surface rounded-2xl p-5 mb-6">
                     <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-5">
-                        <div>
-                            <h2 class="text-xl font-bold text-white">Акции и фонды</h2>
-                            <p class="text-sm text-slate-400">Текущая стоимость и прибыль по открытым позициям</p>
+                        <div class="section-header">
+                            <h2 class="text-base font-bold text-white">Акции и фонды</h2>
                         </div>
-                        <div class="soft rounded-xl px-4 py-3 text-sm">
-                            <span class="text-slate-400">Прибыль по акциям:</span>
-                            <span :class="['ml-2 font-bold', dashboard.total_assets_pnl >= 0 ? 'text-emerald-300' : 'text-red-300']">
-                                {{ signedRub(dashboard.total_assets_pnl) }}
-                            </span>
+                        <div class="flex flex-wrap items-center gap-3">
+                            <p v-if="pricesUpdatedAt" class="text-xs text-slate-500 flex items-center gap-1.5">
+                                <span class="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+                                {{ formatDateTime(pricesUpdatedAt) }} МСК
+                            </p>
+                            <button @click="refreshPrices" :disabled="isRefreshing" class="rounded-lg border border-indigo-700/50 bg-indigo-950/30 px-3 py-1.5 text-xs font-semibold text-indigo-300 hover:border-indigo-500 hover:text-indigo-100 disabled:opacity-50 transition-all">
+                                <span v-if="isRefreshing">⟳ Обновляю...</span>
+                                <span v-else>⟳ Обновить цены с Мосбиржи</span>
+                            </button>
+                            <div class="soft rounded-xl px-4 py-2.5 text-sm">
+                                <span class="text-slate-500 text-xs">Прибыль:</span>
+                                <span :class="['ml-2 font-bold', dashboard.total_assets_pnl >= 0 ? 'text-emerald-400' : 'text-red-400']">
+                                    {{ signedRub(dashboard.total_assets_pnl) }}
+                                </span>
+                            </div>
                         </div>
                     </div>
 
-                    <div v-if="dashboard.assets.length === 0" class="soft rounded-xl p-8 text-center text-slate-400">
+                    <div v-if="dashboard.assets.length === 0" class="soft rounded-xl p-8 text-center text-slate-500 text-sm">
                         Нет открытых позиций. Добавьте покупку акции или фонда.
                     </div>
 
-                    <div v-else class="overflow-x-auto">
+                    <div v-else class="overflow-x-auto scrollbar-thin">
                         <table class="w-full min-w-[1040px] text-sm">
                             <thead>
-                                <tr class="border-b border-slate-700 text-slate-400">
-                                    <th class="py-3 pr-4 text-left font-semibold">Тикер</th>
-                                    <th class="py-3 px-4 text-right font-semibold">Количество</th>
-                                    <th class="py-3 px-4 text-right font-semibold">Средняя</th>
-                                    <th class="py-3 px-4 text-right font-semibold">Текущая</th>
-                                    <th class="py-3 px-4 text-right font-semibold">Стоимость</th>
-                                    <th class="py-3 px-4 text-right font-semibold">Доля</th>
-                                    <th class="py-3 px-4 text-right font-semibold">Прибыль</th>
-                                    <th class="py-3 px-4 text-right font-semibold">%</th>
-                                    <th class="py-3 pl-4 text-right font-semibold">Действия</th>
+                                <tr class="border-b border-slate-800/60 text-slate-500">
+                                    <th class="py-3 pr-4 text-left font-semibold text-xs uppercase tracking-wider">Тикер</th>
+                                    <th class="py-3 px-4 text-right font-semibold text-xs uppercase tracking-wider">Кол-во</th>
+                                    <th class="py-3 px-4 text-right font-semibold text-xs uppercase tracking-wider">Средняя</th>
+                                    <th class="py-3 px-4 text-right font-semibold text-xs uppercase tracking-wider">Текущая</th>
+                                    <th class="py-3 px-4 text-right font-semibold text-xs uppercase tracking-wider">Стоимость</th>
+                                    <th class="py-3 px-4 text-right font-semibold text-xs uppercase tracking-wider">Доля</th>
+                                    <th class="py-3 px-4 text-right font-semibold text-xs uppercase tracking-wider">Прибыль</th>
+                                    <th class="py-3 px-4 text-right font-semibold text-xs uppercase tracking-wider">%</th>
+                                    <th class="py-3 pl-4 text-right font-semibold text-xs uppercase tracking-wider"></th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr v-for="asset in dashboard.assets" :key="asset.ticker" class="table-row border-b border-slate-800">
+                                <tr v-for="asset in dashboard.assets" :key="asset.ticker" class="table-row border-b border-slate-800/40">
                                     <td class="py-4 pr-4 font-bold text-cyan-300">{{ asset.ticker }}</td>
                                     <td class="py-4 px-4 text-right">{{ formatNumber(asset.quantity, 4) }}</td>
                                     <td class="py-4 px-4 text-right">{{ formatRub(asset.average_cost) }}</td>
@@ -205,11 +412,11 @@
                                     </td>
                                     <td class="py-4 pl-4 text-right">
                                         <button
-                                            @click="hideAsset(asset.ticker)"
-                                            class="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:border-red-400 hover:text-red-300"
-                                            title="Скрыть актив из таблицы без удаления операций и без изменения статистики"
+                                            @click="deleteAsset(asset.ticker)"
+                                            class="rounded-lg border border-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:border-red-500/50 hover:text-red-400 transition-all"
+                                            title="Удалить актив и все связанные операции"
                                         >
-                                            Скрыть
+                                            ×
                                         </button>
                                     </td>
                                 </tr>
@@ -220,52 +427,64 @@
 
                 <section class="surface rounded-2xl p-5">
                     <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-5">
-                        <div>
-                            <h2 class="text-xl font-bold text-white">Банковские вклады</h2>
-                            <p class="text-sm text-slate-400">Начисленная прибыль зависит от выбранного графика начисления</p>
+                        <div class="section-header">
+                            <h2 class="text-base font-bold text-white">Банковские вклады</h2>
                         </div>
-                        <div class="soft rounded-xl px-4 py-3 text-sm">
-                            <span class="text-slate-400">Ожидаемая прибыль:</span>
-                            <span class="ml-2 font-bold text-emerald-300">{{ formatRub(dashboard.total_deposits_expected_profit) }}</span>
+                        <div class="soft rounded-xl px-4 py-2.5 text-sm">
+                            <span class="text-slate-500 text-xs">Ожидаемая прибыль:</span>
+                            <span class="ml-2 font-bold text-emerald-400">{{ formatRub(dashboard.total_deposits_expected_profit) }}</span>
                         </div>
                     </div>
 
-                    <div v-if="dashboard.deposits.length === 0" class="soft rounded-xl p-8 text-center text-slate-400">
+                    <div v-if="dashboard.deposits.length === 0" class="soft rounded-xl p-8 text-center text-slate-500 text-sm">
                         Нет активных вкладов.
                     </div>
 
-                    <div v-else class="overflow-x-auto">
+                    <div v-else class="overflow-x-auto scrollbar-thin">
                         <table class="w-full min-w-[980px] text-sm">
                             <thead>
-                                <tr class="border-b border-slate-700 text-slate-400">
-                                    <th class="py-3 pr-4 text-left font-semibold">Банк</th>
-                                    <th class="py-3 px-4 text-right font-semibold">Сумма</th>
-                                    <th class="py-3 px-4 text-right font-semibold">Ставка</th>
-                                    <th class="py-3 px-4 text-left font-semibold">Начисление</th>
-                                    <th class="py-3 px-4 text-right font-semibold">Начислено</th>
-                                    <th class="py-3 px-4 text-right font-semibold">К концу срока</th>
-                                    <th class="py-3 px-4 text-right font-semibold">Текущая стоимость</th>
-                                    <th class="py-3 pl-4 text-right font-semibold">Осталось</th>
+                                <tr class="border-b border-slate-800/60 text-slate-500">
+                                    <th class="py-3 pr-4 text-left font-semibold text-xs uppercase tracking-wider">Банк</th>
+                                    <th class="py-3 px-4 text-right font-semibold text-xs uppercase tracking-wider">Сумма</th>
+                                    <th class="py-3 px-4 text-right font-semibold text-xs uppercase tracking-wider">Ставка</th>
+                                    <th class="py-3 px-4 text-left font-semibold text-xs uppercase tracking-wider">Начисление</th>
+                                    <th class="py-3 px-4 text-right font-semibold text-xs uppercase tracking-wider">Начислено</th>
+                                    <th class="py-3 px-4 text-right font-semibold text-xs uppercase tracking-wider">К концу</th>
+                                    <th class="py-3 px-4 text-right font-semibold text-xs uppercase tracking-wider">Текущая</th>
+                                    <th class="py-3 px-4 text-right font-semibold text-xs uppercase tracking-wider">Осталось</th>
+                                    <th class="py-3 pl-4 text-right font-semibold text-xs uppercase tracking-wider"></th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr v-for="deposit in dashboard.deposits" :key="deposit.id" class="table-row border-b border-slate-800">
+                                <tr v-for="deposit in dashboard.deposits" :key="deposit.id" class="table-row border-b border-slate-800/40">
                                     <td class="py-4 pr-4 font-semibold">{{ deposit.bank_name }}</td>
                                     <td class="py-4 px-4 text-right">{{ formatRub(deposit.amount) }}</td>
                                     <td class="py-4 px-4 text-right text-amber-300 font-semibold">{{ formatPercent(deposit.apy_percent) }}</td>
-                                    <td class="py-4 px-4 text-slate-300">{{ paymentTypeLabel(deposit.interest_payment_type) }}</td>
+                                    <td class="py-4 px-4 text-slate-300">
+                                        {{ paymentTypeLabel(deposit.interest_payment_type) }}
+                                        <span v-if="deposit.capitalize" class="ml-1 badge badge-info">Капитализация</span>
+                                    </td>
                                     <td class="py-4 px-4 text-right text-emerald-300 font-bold">{{ formatRub(deposit.accrued_profit) }}</td>
                                     <td class="py-4 px-4 text-right">{{ formatRub(deposit.expected_profit) }}</td>
                                     <td class="py-4 px-4 text-right font-semibold">{{ formatRub(deposit.current_value) }}</td>
-                                    <td :class="['py-4 pl-4 text-right', deposit.days_remaining <= 30 ? 'text-orange-300 font-semibold' : 'text-slate-300']">
+                                    <td :class="['py-4 px-4 text-right', deposit.days_remaining <= 30 ? 'text-orange-300 font-semibold' : 'text-slate-300']">
                                         {{ deposit.days_remaining }} дн.
+                                    </td>
+                                    <td class="py-4 pl-4 text-right">
+                                        <button
+                                            @click="deleteDeposit(deposit.id, deposit.bank_name)"
+                                            class="rounded-lg border border-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:border-red-500/50 hover:text-red-400 transition-all"
+                                            title="Удалить вклад"
+                                        >
+                                            ×
+                                        </button>
                                     </td>
                                 </tr>
                             </tbody>
                         </table>
                     </div>
                 </section>
-            </template>
+            </div>
 
             <div v-if="showTransactionModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
                 <div class="surface max-w-lg w-full rounded-2xl p-5">
@@ -392,6 +611,14 @@
                             </label>
                         </div>
 
+                        <label class="flex items-center gap-3 cursor-pointer">
+                            <input v-model="newDeposit.capitalize" type="checkbox" class="h-5 w-5 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-400">
+                            <div>
+                                <span class="text-sm font-medium text-slate-300">Капитализация процентов</span>
+                                <p class="text-xs text-slate-500">Начисленные проценты прибавляются к сумме вклада</p>
+                            </div>
+                        </label>
+
                         <div class="soft rounded-xl p-4 text-sm">
                             <div class="flex justify-between gap-4">
                                 <span class="text-slate-400">Срок</span>
@@ -411,6 +638,7 @@
                 </div>
             </div>
         </main>
+        </template>
     </div>
 
     <script>
@@ -419,6 +647,16 @@
         createApp({
             data() {
                 return {
+                    // Auth state
+                    isAuthenticated: false,
+                    authToken: localStorage.getItem('auth_token') || '',
+                    currentUsername: localStorage.getItem('auth_username') || '',
+                    authMode: 'login',
+                    authUsername: '',
+                    authPassword: '',
+                    authError: null,
+                    isAuthenticating: false,
+                    // Dashboard data
                     dashboard: {
                         total_capital: 0,
                         total_portfolio_value: 0,
@@ -432,18 +670,26 @@
                         total_deposits_expected_profit: 0,
                         total_unrealized_pnl: 0,
                         total_unrealized_pnl_percent: 0,
-                        cash_balance: 0,
+                        assets_change_1d: 0,
+                        assets_change_1d_percent: 0,
+                        assets_change_1m: 0,
+                        assets_change_1m_percent: 0,
                         assets: [],
                         deposits: []
                     },
                     history: [],
                     loading: true,
                     error: null,
+                    isRefreshing: false,
+                    pricesUpdatedAt: null,
                     showTransactionModal: false,
                     showDepositModal: false,
                     stockSearchResults: [],
                     chart: null,
+                    stockChart: null,
+                    allocationChart: null,
                     searchTimer: null,
+                    refreshInterval: null,
                     newTransaction: {
                         date: new Date().toISOString().slice(0, 16),
                         type: '',
@@ -457,7 +703,8 @@
                         start_date: new Date().toISOString().slice(0, 10),
                         end_date: '',
                         apy_percent: 0,
-                        interest_payment_type: 'at_end'
+                        interest_payment_type: 'at_end',
+                        capitalize: false
                     }
                 };
             },
@@ -474,18 +721,114 @@
                 depositPreviewProfit() {
                     const amount = Number(this.newDeposit.amount || 0);
                     const apy = Number(this.newDeposit.apy_percent || 0);
-                    return amount * (apy / 100) * this.depositTermDays / 365;
+                    const days = this.depositTermDays;
+                    if (days <= 0 || apy <= 0 || amount <= 0) return 0;
+                    const rate = apy / 100;
+                    if (this.newDeposit.capitalize) {
+                        if (this.newDeposit.interest_payment_type === 'daily') {
+                            return amount * (Math.pow(1 + rate / 365, days) - 1);
+                        }
+                        if (this.newDeposit.interest_payment_type === 'monthly') {
+                            const months = Math.max(1, Math.round(days / 30.44));
+                            return amount * (Math.pow(1 + rate / 12, months) - 1);
+                        }
+                    }
+                    return amount * rate * days / 365;
                 }
             },
             async mounted() {
-                this.initChart();
-                await this.refreshAll();
-
-                setInterval(() => {
-                    this.refreshAll(false);
-                }, 30000);
+                // Check if we have a stored token
+                if (this.authToken) {
+                    const valid = await this.checkAuth();
+                    if (!valid) {
+                        this.logout();
+                        return;
+                    }
+                }
+                // Only start charts and data if authenticated
+                if (this.isAuthenticated) {
+                    this.initApp();
+                }
             },
             methods: {
+                // ============ Auth Methods ============
+                async checkAuth() {
+                    try {
+                        const response = await fetch('/api/auth/me', {
+                            headers: { 'Authorization': 'Bearer ' + this.authToken }
+                        });
+                        if (!response.ok) return false;
+                        const data = await response.json();
+                        this.currentUsername = data.username;
+                        this.isAuthenticated = true;
+                        return true;
+                    } catch {
+                        return false;
+                    }
+                },
+                async submitAuth() {
+                    if (!this.authUsername) { this.authError = 'Введите имя пользователя'; return; }
+                    if (!this.authPassword) { this.authError = 'Введите пароль'; return; }
+                    this.authError = null;
+                    this.isAuthenticating = true;
+                    try {
+                        const url = this.authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
+                        const response = await fetch(url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username: this.authUsername, password: this.authPassword })
+                        });
+                        const data = await response.json();
+                        if (!response.ok) throw new Error(data.detail || 'Ошибка авторизации');
+                        this.authToken = data.access_token;
+                        this.currentUsername = this.authUsername;
+                        localStorage.setItem('auth_token', this.authToken);
+                        localStorage.setItem('auth_username', this.currentUsername);
+                        this.isAuthenticated = true;
+                        this.authPassword = '';
+                        this.initApp();
+                    } catch (error) {
+                        this.authError = error.message;
+                    } finally {
+                        this.isAuthenticating = false;
+                    }
+                },
+                logout() {
+                    this.isAuthenticated = false;
+                    this.authToken = '';
+                    this.currentUsername = '';
+                    localStorage.removeItem('auth_token');
+                    localStorage.removeItem('auth_username');
+                    // Destroy charts on logout
+                    if (this.chart) { this.chart.destroy(); this.chart = null; }
+                    if (this.stockChart) { this.stockChart.destroy(); this.stockChart = null; }
+                    if (this.allocationChart) { this.allocationChart.destroy(); this.allocationChart = null; }
+                    if (this.refreshInterval) { clearInterval(this.refreshInterval); this.refreshInterval = null; }
+                },
+                initApp() {
+                    this.initChart();
+                    this.initStockChart();
+                    this.initAllocationChart();
+                    this.refreshAll();
+                    if (!this.refreshInterval) {
+                        this.refreshInterval = setInterval(() => {
+                            this.refreshAll(false);
+                        }, 60 * 60 * 1000);
+                    }
+                },
+                apiFetch(url, options = {}) {
+                    options.headers = options.headers || {};
+                    options.headers['Authorization'] = 'Bearer ' + this.authToken;
+                    return fetch(url, options);
+                },
+                handleAuthError(response) {
+                    if (response.status === 401) {
+                        this.logout();
+                        return true;
+                    }
+                    return false;
+                },
+                // ============ Format Helpers ============
                 formatRub(value) {
                     return new Intl.NumberFormat('ru-RU', {
                         style: 'currency',
@@ -501,11 +844,27 @@
                 formatPercent(value) {
                     return `${Number(value || 0).toFixed(2)}%`;
                 },
+                signedPercent(value) {
+                    const number = Number(value || 0);
+                    return `${number >= 0 ? '+' : ''}${number.toFixed(2)}%`;
+                },
                 formatNumber(value, digits = 2) {
                     return new Intl.NumberFormat('ru-RU', {
                         minimumFractionDigits: 0,
                         maximumFractionDigits: digits
                     }).format(Number(value || 0));
+                },
+                formatDateTime(isoString) {
+                    if (!isoString) return '';
+                    const dt = new Date(isoString);
+                    return dt.toLocaleString('ru-RU', {
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        timeZone: 'Europe/Moscow'
+                    });
                 },
                 paymentTypeLabel(value) {
                     return {
@@ -523,26 +882,46 @@
                     this.error = null;
                     this.showDepositModal = true;
                 },
-                async refreshAll(showLoader = true) {
-                    if (showLoader) this.loading = true;
-                    await this.fetchDashboard();
-                    await this.fetchHistory();
-                    this.loading = false;
+                async refreshPrices() {
+                    await this.refreshAll(false, true);
                 },
-                async fetchDashboard() {
+                async refreshAll(showLoader = true, force = false) {
+                    if (this.isRefreshing) return;
+                    this.isRefreshing = true;
+                    if (showLoader) this.loading = true;
+                    try {
+                        await this.fetchDashboard(force);
+                        await this.fetchHistory();
+                        this.loading = false;
+                        await this.$nextTick();
+                        this.updateStockChart();
+                        this.updateAllocationChart();
+                        if (this.chart) this.chart.resize();
+                        if (this.stockChart) this.stockChart.resize();
+                        if (this.allocationChart) this.allocationChart.resize();
+                    } finally {
+                        this.loading = false;
+                        this.isRefreshing = false;
+                    }
+                },
+                async fetchDashboard(force = false) {
                     try {
                         this.error = null;
-                        const response = await fetch('/api/dashboard');
+                        const url = force ? '/api/dashboard?force=true' : '/api/dashboard';
+                        const response = await this.apiFetch(url);
+                        if (this.handleAuthError(response)) return;
                         const data = await response.json();
                         if (!response.ok) throw new Error(data.detail || 'Не удалось загрузить портфель');
                         this.dashboard = data;
+                        this.pricesUpdatedAt = data.prices_updated_at || null;
                     } catch (error) {
                         this.error = error.message;
                     }
                 },
                 async fetchHistory() {
                     try {
-                        const response = await fetch('/api/history');
+                        const response = await this.apiFetch('/api/history');
+                        if (this.handleAuthError(response)) return;
                         const data = await response.json();
                         if (!response.ok) throw new Error(data.detail || 'Не удалось загрузить историю');
                         this.history = data;
@@ -572,11 +951,12 @@
                             total_amount: this.isAssetOperation ? null : this.newTransaction.total_amount
                         };
 
-                        const response = await fetch('/api/transactions', {
+                        const response = await this.apiFetch('/api/transactions', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(payload)
                         });
+                        if (this.handleAuthError(response)) throw new Error('Сессия истекла');
                         const data = await response.json();
                         if (!response.ok) throw new Error(data.detail || 'Не удалось сохранить операцию');
 
@@ -609,14 +989,16 @@
                             start_date: this.newDeposit.start_date,
                             end_date: this.newDeposit.end_date,
                             apy_percent: this.newDeposit.apy_percent,
-                            interest_payment_type: this.newDeposit.interest_payment_type
+                            interest_payment_type: this.newDeposit.interest_payment_type,
+                            capitalize: this.newDeposit.capitalize
                         };
 
-                        const response = await fetch('/api/bank-deposits', {
+                        const response = await this.apiFetch('/api/bank-deposits', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(payload)
                         });
+                        if (this.handleAuthError(response)) throw new Error('Сессия истекла');
                         const data = await response.json();
                         if (!response.ok) throw new Error(data.detail || 'Не удалось сохранить вклад');
 
@@ -627,26 +1009,48 @@
                             start_date: new Date().toISOString().slice(0, 10),
                             end_date: '',
                             apy_percent: 0,
-                            interest_payment_type: 'at_end'
+                            interest_payment_type: 'at_end',
+                            capitalize: false
                         };
                         await this.refreshAll(false);
                     } catch (error) {
                         this.error = error.message;
                     }
                 },
-                async hideAsset(ticker) {
+                async deleteAsset(ticker) {
                     try {
                         this.error = null;
                         const confirmed = window.confirm(
-                            `Скрыть ${ticker} из таблицы? Операции, прибыль и общая статистика не изменятся.`
+                            `Удалить актив ${ticker} и ВСЕ связанные операции? Это действие нельзя отменить.`
                         );
                         if (!confirmed) return;
 
-                        const response = await fetch(`/api/assets/${encodeURIComponent(ticker)}`, {
+                        const response = await this.apiFetch(`/api/assets/${encodeURIComponent(ticker)}`, {
                             method: 'DELETE'
                         });
+                        if (this.handleAuthError(response)) throw new Error('Сессия истекла');
                         const data = await response.json();
-                        if (!response.ok) throw new Error(data.detail || 'Не удалось скрыть актив');
+                        if (!response.ok) throw new Error(data.detail || 'Не удалось удалить актив');
+
+                        await this.refreshAll(false);
+                    } catch (error) {
+                        this.error = error.message;
+                    }
+                },
+                async deleteDeposit(id, bankName) {
+                    try {
+                        this.error = null;
+                        const confirmed = window.confirm(
+                            `Удалить вклад '${bankName}'? Это действие нельзя отменить.`
+                        );
+                        if (!confirmed) return;
+
+                        const response = await this.apiFetch(`/api/bank-deposits/${id}`, {
+                            method: 'DELETE'
+                        });
+                        if (this.handleAuthError(response)) throw new Error('Сессия истекла');
+                        const data = await response.json();
+                        if (!response.ok) throw new Error(data.detail || 'Не удалось удалить вклад');
 
                         await this.refreshAll(false);
                     } catch (error) {
@@ -663,7 +1067,8 @@
 
                     this.searchTimer = setTimeout(async () => {
                         try {
-                            const response = await fetch(`/api/stocks/search?q=${encodeURIComponent(query)}`);
+                            const response = await this.apiFetch(`/api/stocks/search?q=${encodeURIComponent(query)}`);
+                            if (this.handleAuthError(response)) return;
                             this.stockSearchResults = response.ok ? await response.json() : [];
                         } catch (error) {
                             console.error(error);
@@ -690,9 +1095,9 @@
                             datasets: [{
                                 label: 'Стоимость портфеля',
                                 data: [],
-                                borderColor: '#22d3ee',
-                                backgroundColor: 'rgba(34, 211, 238, 0.12)',
-                                pointBackgroundColor: '#22d3ee',
+                                borderColor: '#6366f1',
+                                backgroundColor: 'rgba(99, 102, 241, 0.10)',
+                                pointBackgroundColor: '#6366f1',
                                 pointBorderColor: '#0f172a',
                                 pointBorderWidth: 2,
                                 pointRadius: 4,
@@ -724,7 +1129,6 @@
                                     grid: { color: 'rgba(148, 163, 184, 0.08)' }
                                 },
                                 y: {
-                                    beginAtZero: true,
                                     ticks: {
                                         color: '#94a3b8',
                                         callback: (value) => this.formatRub(value)
@@ -744,6 +1148,185 @@
                     });
                     this.chart.data.datasets[0].data = this.history.map((item) => Number(item.total_value || 0));
                     this.chart.update();
+                },
+                initStockChart() {
+                    const canvas = document.getElementById('stockAllocationChart');
+                    if (!canvas || typeof Chart === 'undefined') return;
+                    this.stockChart = new Chart(canvas, {
+                        type: 'doughnut',
+                        data: {
+                            labels: [],
+                            datasets: [{
+                                data: [],
+                                backgroundColor: [
+                                    '#6366f1', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b',
+                                    '#ec4899', '#14b8a6', '#a78bfa', '#f43f5e', '#22d3ee',
+                                    '#84cc16', '#e879f9', '#38bdf8', '#facc15', '#fb923c'
+                                ],
+                                borderColor: '#0f172a',
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    position: 'right',
+                                    labels: { color: '#cbd5e1', padding: 10, font: { size: 11 } }
+                                },
+                                datalabels: {
+                                    display: true,
+                                    color: '#fff',
+                                    font: { weight: 'bold', size: 12 },
+                                    formatter: (value, ctx) => {
+                                        const v = Number(value);
+                                        if (!isFinite(v) || v <= 0) return '';
+                                        const total = ctx.chart.data.datasets[0].data.reduce((a, b) => Number(a || 0) + Number(b || 0), 0);
+                                        if (total <= 0) return '';
+                                        const pct = (v / total * 100).toFixed(1);
+                                        return pct >= 3 ? `${pct}%` : '';
+                                    }
+                                },
+                                tooltip: {
+                                    callbacks: {
+                                        label: (ctx) => {
+                                            const val = ctx.parsed;
+                                            const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+                                            const pct = total > 0 ? (val / total * 100).toFixed(1) : 0;
+                                            return ` ${ctx.label}: ${this.formatRub(val)} (${pct}%)`;
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        plugins: [typeof ChartDataLabels !== 'undefined' ? ChartDataLabels : {}]
+                    });
+                },
+                initAllocationChart() {
+                    const canvas = document.getElementById('allocationChart');
+                    if (!canvas || typeof Chart === 'undefined') return;
+                    this.allocationChart = new Chart(canvas, {
+                        type: 'doughnut',
+                        data: {
+                            labels: ['Нет данных'],
+                            datasets: [{
+                                data: [1],
+                                backgroundColor: ['rgba(148, 163, 184, 0.15)'],
+                                borderColor: ['#0f172a'],
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    position: 'right',
+                                    labels: { color: '#cbd5e1', padding: 10, font: { size: 11 } }
+                                },
+                                datalabels: {
+                                    display: false,
+                                    formatter: () => ''
+                                },
+                                tooltip: {
+                                    callbacks: {
+                                        label: (ctx) => {
+                                            const val = Number(ctx.parsed) || 0;
+                                            const total = ctx.dataset.data.reduce((a, b) => Number(a || 0) + Number(b || 0), 0);
+                                            const pct = total > 0 ? (val / total * 100).toFixed(1) : '0.0';
+                                            return ` ${ctx.label}: ${this.formatRub(val)} (${pct}%)`;
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        plugins: [typeof ChartDataLabels !== 'undefined' ? ChartDataLabels : {}]
+                    });
+                },
+                updateStockChart() {
+                    if (!this.stockChart) return;
+                    const assets = this.dashboard.assets || [];
+                    if (assets.length === 0) {
+                        this.stockChart.data.labels = ['Нет данных'];
+                        this.stockChart.data.datasets[0].data = [1];
+                        this.stockChart.data.datasets[0].backgroundColor = ['rgba(148, 163, 184, 0.2)'];
+                    } else {
+                        this.stockChart.data.labels = assets.map(a => a.ticker);
+                        this.stockChart.data.datasets[0].data = assets.map(a => Number(a.total_value || 0));
+                        this.stockChart.data.datasets[0].backgroundColor = [
+                            '#6366f1', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b',
+                            '#ec4899', '#14b8a6', '#a78bfa', '#f43f5e', '#22d3ee',
+                            '#84cc16', '#e879f9', '#38bdf8', '#facc15', '#fb923c'
+                        ];
+                    }
+                    this.stockChart.update();
+                },
+                updateAllocationChart() {
+                    const canvas = document.getElementById('allocationChart');
+                    if (!canvas || typeof Chart === 'undefined') return;
+
+                    // Destroy previous instance — Chart.js can't properly
+                    // resize doughnut charts that were initialized while hidden
+                    if (this.allocationChart) {
+                        this.allocationChart.destroy();
+                        this.allocationChart = null;
+                    }
+
+                    const d = this.dashboard;
+                    const stocksVal = Number(d.total_assets_value || 0);
+                    const depositsVal = Number(d.total_in_deposits || 0);
+                    const cashVal = Math.max(0, Number(d.total_portfolio_value || 0) - stocksVal - depositsVal);
+
+                    const labels = [];
+                    const values = [];
+                    const colors = [];
+                    if (stocksVal > 0) { labels.push('Акции и фонды'); values.push(stocksVal); colors.push('#6366f1'); }
+                    if (depositsVal > 0) { labels.push('Банковские вклады'); values.push(depositsVal); colors.push('#f59e0b'); }
+                    if (cashVal > 0.01) { labels.push('Свободные средства'); values.push(cashVal); colors.push('#10b981'); }
+                    if (values.length === 0) {
+                        labels.push('Нет данных');
+                        values.push(1);
+                        colors.push('rgba(148, 163, 184, 0.15)');
+                    }
+
+                    this.allocationChart = new Chart(canvas, {
+                        type: 'doughnut',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                data: values,
+                                backgroundColor: colors,
+                                borderColor: colors.map(() => '#0f172a'),
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    position: 'right',
+                                    labels: { color: '#cbd5e1', padding: 10, font: { size: 11 } }
+                                },
+                                datalabels: {
+                                    display: false,
+                                    formatter: () => ''
+                                },
+                                tooltip: {
+                                    callbacks: {
+                                        label: (ctx) => {
+                                            const val = Number(ctx.parsed) || 0;
+                                            const total = ctx.dataset.data.reduce((a, b) => Number(a || 0) + Number(b || 0), 0);
+                                            const pct = total > 0 ? (val / total * 100).toFixed(1) : '0.0';
+                                            return ` ${ctx.label}: ${this.formatRub(val)} (${pct}%)`;
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        plugins: [typeof ChartDataLabels !== 'undefined' ? ChartDataLabels : {}]
+                    });
                 }
             }
         }).mount('#app');
