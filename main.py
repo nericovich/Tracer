@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import calendar
+import logging
 import os
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 
@@ -21,8 +23,50 @@ from models import (
     Transaction, TransactionType, User,
 )
 
+logger = logging.getLogger("portfolio")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
-app = FastAPI(title="Трекер портфеля")
+_http_client: Optional[httpx.AsyncClient] = None
+_moex_semaphore: Optional[asyncio.Semaphore] = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    """Return the shared httpx client, creating one lazily if needed."""
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient()
+    return _http_client
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    global _http_client, _moex_semaphore
+    # Startup
+    _http_client = httpx.AsyncClient()
+    _moex_semaphore = asyncio.Semaphore(5)
+    migrate_schema()
+    db = next(get_db())
+    try:
+        if db.query(User).count() == 0:
+            default_user = User(username="admin", password_hash=hash_password("S1-ola11"))
+            db.add(default_user)
+            db.commit()
+            db.refresh(default_user)
+            db.query(Transaction).filter(Transaction.user_id.is_(None)).update({"user_id": default_user.id})
+            db.query(BankDeposit).filter(BankDeposit.user_id.is_(None)).update({"user_id": default_user.id})
+            db.query(HiddenAsset).filter(HiddenAsset.user_id.is_(None)).update({"user_id": default_user.id})
+            db.query(PortfolioHistory).filter(PortfolioHistory.user_id.is_(None)).update({"user_id": default_user.id})
+            db.commit()
+    finally:
+        db.close()
+    yield
+    # Shutdown
+    if _http_client and not _http_client.is_closed:
+        await _http_client.aclose()
+    _http_client = None
+
+
+app = FastAPI(title="Трекер портфеля", lifespan=lifespan)
 
 InterestPaymentType = Literal["daily", "monthly", "at_end", "upfront"]
 
@@ -174,12 +218,13 @@ async def get_moex_price(ticker: str) -> Optional[float]:
     preferred_boards = ["TQBR", "TQTF", "TQIF", "TQTD", "TQPI"]
     price_fields = ["LAST", "LCURRENTPRICE", "MARKETPRICE", "WAPRICE", "LEGALCLOSEPRICE", "PREVPRICE"]
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, params=params, timeout=10)
+        assert _moex_semaphore is not None
+        async with _moex_semaphore:
+            response = await _get_client().get(url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
     except Exception as exc:
-        print(f"MOEX price error for {secid}: {exc}")
+        logger.warning("MOEX price error for %s: %s", secid, exc)
         return None
     marketdata = data.get("marketdata", {})
     rows = marketdata.get("data", [])
@@ -212,12 +257,13 @@ async def get_moex_historical_price(ticker: str, trade_date: date) -> Optional[f
     preferred_boards = ["TQBR", "TQTF", "TQIF", "TQTD", "TQPI"]
     price_fields = ["CLOSE", "MARKETPRICE3", "MARKETPRICE2", "LEGALCLOSEPRICE", "WAPRICE"]
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, params=params, timeout=10)
+        assert _moex_semaphore is not None
+        async with _moex_semaphore:
+            response = await _get_client().get(url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
     except Exception as exc:
-        print(f"MOEX history price error for {secid}: {exc}")
+        logger.warning("MOEX history price error for %s: %s", secid, exc)
         return None
     history = data.get("history", {})
     rows = history.get("data", [])
@@ -252,8 +298,9 @@ async def search_moex_stocks(query: str = "") -> list[dict[str, str]]:
     if not normalized_query:
         return []
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
+        assert _moex_semaphore is not None
+        async with _moex_semaphore:
+            response = await _get_client().get(
                 "https://iss.moex.com/iss/securities.json",
                 params={"q": normalized_query, "is_trading": 1, "iss.meta": "off", "lang": "ru"},
                 timeout=10,
@@ -261,7 +308,7 @@ async def search_moex_stocks(query: str = "") -> list[dict[str, str]]:
             response.raise_for_status()
             data = response.json()
     except Exception as exc:
-        print(f"MOEX search error for {normalized_query}: {exc}")
+        logger.warning("MOEX search error for %s: %s", normalized_query, exc)
         return []
     securities = data.get("securities", {})
     results: list[dict[str, str]] = []
@@ -304,8 +351,9 @@ async def update_price_from_moex(db: Session, ticker: str) -> Optional[float]:
 async def get_usd_rub_rate() -> float:
     """Fetch USD/RUB exchange rate from MOEX. Returns rate or fallback of 90.0"""
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
+        assert _moex_semaphore is not None
+        async with _moex_semaphore:
+            response = await _get_client().get(
                 "https://iss.moex.com/iss/engines/currency/markets/selt/securities/USDRUB_TOM.json",
                 params={"iss.meta": "off", "lang": "ru"},
                 timeout=10,
@@ -319,7 +367,7 @@ async def get_usd_rub_rate() -> float:
             if rate and float(rate) > 0:
                 return float(rate)
     except Exception as exc:
-        print(f"MOEX USD/RUB rate error: {exc}")
+        logger.warning("MOEX USD/RUB rate error: %s", exc)
     return 90.0
 
 
@@ -379,6 +427,23 @@ def deposit_expected_profit(deposit: BankDeposit) -> float:
         float(deposit.amount), float(deposit.apy_percent),
         deposit.start_date, deposit.end_date,
     )
+
+
+def compute_expected_profit_from_schema(
+    amount: float,
+    apy_percent: float,
+    start_date: date,
+    end_date: date,
+    interest_payment_type: str,
+    capitalize: bool,
+    expected_profit: Optional[float] = None,
+) -> float:
+    """Compute expected deposit profit from raw schema fields, avoiding duplication."""
+    if expected_profit is not None and expected_profit > 0:
+        return expected_profit
+    if capitalize:
+        return compound_deposit_profit(amount, apy_percent, start_date, end_date, interest_payment_type)
+    return simple_deposit_profit(amount, apy_percent, start_date, end_date)
 
 
 def deposit_accrued_profit(deposit: BankDeposit, valuation_date: date) -> float:
@@ -618,12 +683,31 @@ def build_dashboard_snapshot(
     total_assets_cost_basis = 0.0
     total_assets_unrealized_pnl = 0.0
     total_assets_realized_pnl = 0.0
+
+    # Batch-load all AssetPrice records in one query to avoid N+1
+    all_tickers = list(holdings.keys())
+    price_map: dict[str, AssetPrice] = {}
+    if all_tickers:
+        price_map = {
+            p.ticker: p
+            for p in db.query(AssetPrice).filter(AssetPrice.ticker.in_(all_tickers)).all()
+        }
+    # Create any missing price records in bulk
+    missing = [t for t in all_tickers if t not in price_map]
+    if missing:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        for t in missing:
+            new_price = AssetPrice(ticker=t, current_price=0.0, last_updated=now)
+            db.add(new_price)
+            price_map[t] = new_price
+        db.commit()
+
     for ticker, holding in holdings.items():
         quantity = float(holding["quantity"])
         cost_basis = float(holding["cost_basis"])
         realized_pnl = float(holding["realized_pnl"])
-        price_record = get_or_create_price(db, ticker)
-        current_price = float(price_record.current_price or 0)
+        price_record = price_map.get(ticker)
+        current_price = float(price_record.current_price or 0) if price_record else 0.0
         total_value = quantity * current_price
         unrealized_pnl = total_value - cost_basis
         total_pnl = unrealized_pnl + realized_pnl
@@ -714,30 +798,6 @@ def update_portfolio_history(db: Session, user_id: int) -> None:
 
 
 # ============ API Endpoints ============
-
-
-@app.on_event("startup")
-def startup_event() -> None:
-    migrate_schema()
-    # Create default user and assign existing data if no users exist
-    db = next(get_db())
-    try:
-        if db.query(User).count() == 0:
-            default_user = User(username="admin", password_hash=hash_password("S1-ola11"))
-            db.add(default_user)
-            db.commit()
-            db.refresh(default_user)
-            # Assign all orphaned data to default user
-            db.query(Transaction).filter(Transaction.user_id.is_(None)).update({"user_id": default_user.id})
-            db.query(BankDeposit).filter(BankDeposit.user_id.is_(None)).update({"user_id": default_user.id})
-            db.query(HiddenAsset).filter(HiddenAsset.user_id.is_(None)).update({"user_id": default_user.id})
-            db.query(PortfolioHistory).filter(PortfolioHistory.user_id.is_(None)).update({"user_id": default_user.id})
-            db.commit()
-        # Cleanup: remove history record for 2026-06-09
-        db.query(PortfolioHistory).filter(PortfolioHistory.date == date(2026, 6, 9)).delete()
-        db.commit()
-    finally:
-        db.close()
 
 
 @app.get("/")
@@ -924,7 +984,6 @@ async def get_portfolio_history(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user_dep),
 ) -> list[dict[str, Any]]:
-    update_portfolio_history(db, user.id)
     history = (
         db.query(PortfolioHistory)
         .filter(PortfolioHistory.user_id == user.id)
@@ -958,14 +1017,9 @@ async def add_bank_deposit(
 ) -> dict[str, Any]:
     if deposit.end_date <= deposit.start_date:
         raise HTTPException(status_code=400, detail="Дата окончания должна быть позже даты начала.")
-    expected_profit = (
-        deposit.expected_profit
-        if deposit.expected_profit is not None and deposit.expected_profit > 0
-        else (
-            compound_deposit_profit(deposit.amount, deposit.apy_percent, deposit.start_date, deposit.end_date, deposit.interest_payment_type)
-            if deposit.capitalize
-            else simple_deposit_profit(deposit.amount, deposit.apy_percent, deposit.start_date, deposit.end_date)
-        )
+    expected_profit = compute_expected_profit_from_schema(
+        deposit.amount, deposit.apy_percent, deposit.start_date, deposit.end_date,
+        deposit.interest_payment_type, deposit.capitalize, deposit.expected_profit,
     )
     new_deposit = BankDeposit(
         user_id=user.id, bank_name=deposit.bank_name.strip(), amount=deposit.amount,
@@ -994,14 +1048,9 @@ async def update_bank_deposit(
         raise HTTPException(status_code=404, detail="Вклад не найден.")
     if deposit.end_date <= deposit.start_date:
         raise HTTPException(status_code=400, detail="Дата окончания должна быть позже даты начала.")
-    expected_profit = (
-        deposit.expected_profit
-        if deposit.expected_profit is not None and deposit.expected_profit > 0
-        else (
-            compound_deposit_profit(deposit.amount, deposit.apy_percent, deposit.start_date, deposit.end_date, deposit.interest_payment_type)
-            if deposit.capitalize
-            else simple_deposit_profit(deposit.amount, deposit.apy_percent, deposit.start_date, deposit.end_date)
-        )
+    expected_profit = compute_expected_profit_from_schema(
+        deposit.amount, deposit.apy_percent, deposit.start_date, deposit.end_date,
+        deposit.interest_payment_type, deposit.capitalize, deposit.expected_profit,
     )
     existing.bank_name = deposit.bank_name.strip()
     existing.amount = deposit.amount

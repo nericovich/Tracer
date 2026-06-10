@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, Date, Enum, Boolean, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 import enum
 
 Base = declarative_base()
@@ -20,7 +20,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     transactions = relationship("Transaction", back_populates="user", cascade="all, delete-orphan")
     bank_deposits = relationship("BankDeposit", back_populates="user", cascade="all, delete-orphan")
@@ -33,7 +33,7 @@ class Transaction(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
-    date = Column(DateTime, default=datetime.utcnow, index=True)
+    date = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), index=True)
     type = Column(Enum(TransactionType), index=True)
     ticker = Column(String, nullable=True, index=True)
     quantity = Column(Float, nullable=True)
@@ -48,7 +48,7 @@ class AssetPrice(Base):
 
     ticker = Column(String, primary_key=True, index=True)
     current_price = Column(Float)
-    last_updated = Column(DateTime, default=datetime.utcnow)
+    last_updated = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
 
 class HiddenAsset(Base):
@@ -57,7 +57,7 @@ class HiddenAsset(Base):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     ticker = Column(String, index=True)
-    hidden_at = Column(DateTime, default=datetime.utcnow)
+    hidden_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     user = relationship("User", back_populates="hidden_assets")
 
