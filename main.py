@@ -646,7 +646,7 @@ def build_dashboard_snapshot(
                 total_pnl_percent=(total_pnl / cost_basis * 100) if cost_basis > 0 else 0,
             ))
     total_in_deposits = total_deposits_principal + total_deposits_accrued_profit
-    total_portfolio_value = total_assets_value + total_in_deposits + cash_balance
+    total_portfolio_value = total_assets_value + total_in_deposits
     total_assets_pnl = total_assets_unrealized_pnl + total_assets_realized_pnl
     total_unrealized_pnl = total_assets_pnl + total_deposits_accrued_profit
     total_cost_basis = total_assets_cost_basis + total_deposits_principal

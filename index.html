@@ -120,7 +120,6 @@
         .stat-card-blue::before { background: linear-gradient(90deg, #6366f1, #8b5cf6); }
         .stat-card-cyan::before { background: linear-gradient(90deg, #06b6d4, #22d3ee); }
         .stat-card-amber::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
-        .stat-card-violet::before { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
 
         .table-row {
             transition: background 0.2s ease;
@@ -322,14 +321,6 @@
                     </div>
                 </section>
 
-                <section v-if="dashboard.cash_balance !== 0" class="mb-6">
-                    <div class="surface rounded-2xl p-5 stat-card stat-card-violet">
-                        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Нераспределённые средства</p>
-                        <p class="mt-3 text-2xl font-bold text-violet-300 tracking-tight">{{ formatRub(dashboard.cash_balance) }}</p>
-                        <p class="mt-1 text-sm text-slate-400">≈ {{ formatUsd(dashboard.cash_balance_usd) }}</p>
-                    </div>
-                </section>
-
                 <section class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                     <div class="surface rounded-2xl p-5">
                         <div class="section-header"><h2 class="text-base font-bold text-white">Распределение акций</h2></div>
@@ -358,7 +349,7 @@
                             Обновлены: {{ formatDateTime(pricesUpdatedAt) }} МСК
                         </p>
                     </div>
-                    <p class="text-xs text-slate-500 mb-3">График учитывает акции, вклады с начисленной прибылью и нераспределённые средства</p>
+                    <p class="text-xs text-slate-500 mb-3">График учитывает акции и вклады с начисленной прибылью</p>
                     <div class="h-80">
                         <canvas id="portfolioChart"></canvas>
                     </div>
@@ -1303,14 +1294,12 @@
                     const d = this.dashboard;
                     const stocksVal = Number(d.total_assets_value || 0);
                     const depositsVal = Number(d.total_in_deposits || 0);
-                    const cashVal = Math.max(0, Number(d.total_portfolio_value || 0) - stocksVal - depositsVal);
 
                     const labels = [];
                     const values = [];
                     const colors = [];
                     if (stocksVal > 0) { labels.push('Акции и фонды'); values.push(stocksVal); colors.push('#6366f1'); }
                     if (depositsVal > 0) { labels.push('Банковские вклады'); values.push(depositsVal); colors.push('#f59e0b'); }
-                    if (cashVal > 0.01) { labels.push('Свободные средства'); values.push(cashVal); colors.push('#10b981'); }
                     if (values.length === 0) {
                         labels.push('Нет данных');
                         values.push(1);
