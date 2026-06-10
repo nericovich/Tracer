@@ -321,7 +321,7 @@
                     </div>
                 </section>
 
-                <section class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <section class="mb-6">
                     <div class="surface rounded-2xl p-5">
                         <div class="section-header"><h2 class="text-base font-bold text-white">Распределение акций</h2></div>
                         <div class="h-64 relative">
@@ -330,12 +330,6 @@
                         <p v-if="dashboard.assets.length === 0" class="mt-2 text-center text-xs text-slate-500">
                             Нет открытых позиций
                         </p>
-                    </div>
-                    <div class="surface rounded-2xl p-5">
-                        <div class="section-header"><h2 class="text-base font-bold text-white">Структура капитала</h2></div>
-                        <div class="h-64 relative">
-                            <canvas id="allocationChart"></canvas>
-                        </div>
                     </div>
                 </section>
 
@@ -475,13 +469,22 @@
                                         {{ deposit.days_remaining }} дн.
                                     </td>
                                     <td class="py-4 pl-4 text-right">
-                                        <button
-                                            @click="deleteDeposit(deposit.id, deposit.bank_name)"
-                                            class="rounded-lg border border-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:border-red-500/50 hover:text-red-400 transition-all"
-                                            title="Удалить вклад"
-                                        >
-                                            ×
-                                        </button>
+                                        <div class="flex items-center justify-end gap-2">
+                                            <button
+                                                @click="editDeposit(deposit)"
+                                                class="rounded-lg border border-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:border-indigo-500/50 hover:text-indigo-400 transition-all"
+                                                title="Редактировать вклад"
+                                            >
+                                                ✎
+                                            </button>
+                                            <button
+                                                @click="deleteDeposit(deposit.id, deposit.bank_name)"
+                                                class="rounded-lg border border-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:border-red-500/50 hover:text-red-400 transition-all"
+                                                title="Удалить вклад"
+                                            >
+                                                ×
+                                            </button>
+                                        </div>
                                     </td>
                                 </tr>
                             </tbody>
@@ -569,10 +572,10 @@
                 <div class="surface max-w-lg w-full rounded-2xl p-5">
                     <div class="mb-5 flex items-start justify-between gap-4">
                         <div>
-                            <h3 class="text-xl font-bold">Новый вклад</h3>
+                            <h3 class="text-xl font-bold">{{ editingDepositId ? 'Редактировать вклад' : 'Новый вклад' }}</h3>
                             <p class="text-sm text-slate-400">Прибыль рассчитывается по сумме, ставке, сроку и графику начисления</p>
                         </div>
-                        <button @click="showDepositModal = false" class="btn btn-secondary px-3 py-2">×</button>
+                        <button @click="closeDepositModal" class="btn btn-secondary px-3 py-2">×</button>
                     </div>
 
                     <div class="space-y-4">
@@ -636,8 +639,8 @@
                     </div>
 
                     <div class="mt-6 grid grid-cols-2 gap-3">
-                        <button @click="submitDeposit" class="btn btn-primary">Сохранить</button>
-                        <button @click="showDepositModal = false" class="btn btn-secondary">Отмена</button>
+                        <button @click="submitDeposit" class="btn btn-primary">{{ editingDepositId ? 'Обновить' : 'Сохранить' }}</button>
+                        <button @click="closeDepositModal" class="btn btn-secondary">Отмена</button>
                     </div>
                 </div>
             </div>
@@ -694,10 +697,10 @@
                     pricesUpdatedAt: null,
                     showTransactionModal: false,
                     showDepositModal: false,
+                    editingDepositId: null,
                     stockSearchResults: [],
                     chart: null,
                     stockChart: null,
-                    allocationChart: null,
                     searchTimer: null,
                     refreshInterval: null,
                     newTransaction: {
@@ -812,13 +815,11 @@
                     // Destroy charts on logout
                     if (this.chart) { this.chart.destroy(); this.chart = null; }
                     if (this.stockChart) { this.stockChart.destroy(); this.stockChart = null; }
-                    if (this.allocationChart) { this.allocationChart.destroy(); this.allocationChart = null; }
                     if (this.refreshInterval) { clearInterval(this.refreshInterval); this.refreshInterval = null; }
                 },
                 initApp() {
                     this.initChart();
                     this.initStockChart();
-                    this.initAllocationChart();
                     this.refreshAll();
                     if (!this.refreshInterval) {
                         this.refreshInterval = setInterval(() => {
@@ -898,7 +899,44 @@
                 },
                 openDepositModal() {
                     this.error = null;
+                    this.editingDepositId = null;
+                    this.newDeposit = {
+                        bank_name: '',
+                        amount: 0,
+                        start_date: new Date().toISOString().slice(0, 10),
+                        end_date: '',
+                        apy_percent: 0,
+                        interest_payment_type: 'at_end',
+                        capitalize: false
+                    };
                     this.showDepositModal = true;
+                },
+                editDeposit(deposit) {
+                    this.error = null;
+                    this.editingDepositId = deposit.id;
+                    this.newDeposit = {
+                        bank_name: deposit.bank_name,
+                        amount: deposit.amount,
+                        start_date: deposit.start_date,
+                        end_date: deposit.end_date,
+                        apy_percent: deposit.apy_percent,
+                        interest_payment_type: deposit.interest_payment_type,
+                        capitalize: deposit.capitalize
+                    };
+                    this.showDepositModal = true;
+                },
+                closeDepositModal() {
+                    this.showDepositModal = false;
+                    this.editingDepositId = null;
+                    this.newDeposit = {
+                        bank_name: '',
+                        amount: 0,
+                        start_date: new Date().toISOString().slice(0, 10),
+                        end_date: '',
+                        apy_percent: 0,
+                        interest_payment_type: 'at_end',
+                        capitalize: false
+                    };
                 },
                 async refreshPrices() {
                     await this.refreshAll(false, true);
@@ -913,10 +951,8 @@
                         this.loading = false;
                         await this.$nextTick();
                         this.updateStockChart();
-                        this.updateAllocationChart();
                         if (this.chart) this.chart.resize();
                         if (this.stockChart) this.stockChart.resize();
-                        if (this.allocationChart) this.allocationChart.resize();
                     } finally {
                         this.loading = false;
                         this.isRefreshing = false;
@@ -1011,8 +1047,13 @@
                             capitalize: this.newDeposit.capitalize
                         };
 
-                        const response = await this.apiFetch('/api/bank-deposits', {
-                            method: 'POST',
+                        const url = this.editingDepositId
+                            ? `/api/bank-deposits/${this.editingDepositId}`
+                            : '/api/bank-deposits';
+                        const method = this.editingDepositId ? 'PUT' : 'POST';
+
+                        const response = await this.apiFetch(url, {
+                            method: method,
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(payload)
                         });
@@ -1020,16 +1061,7 @@
                         const data = await response.json();
                         if (!response.ok) throw new Error(data.detail || 'Не удалось сохранить вклад');
 
-                        this.showDepositModal = false;
-                        this.newDeposit = {
-                            bank_name: '',
-                            amount: 0,
-                            start_date: new Date().toISOString().slice(0, 10),
-                            end_date: '',
-                            apy_percent: 0,
-                            interest_payment_type: 'at_end',
-                            capitalize: false
-                        };
+                        this.closeDepositModal();
                         await this.refreshAll(false);
                     } catch (error) {
                         this.error = error.message;
@@ -1221,47 +1253,6 @@
                         plugins: [typeof ChartDataLabels !== 'undefined' ? ChartDataLabels : {}]
                     });
                 },
-                initAllocationChart() {
-                    const canvas = document.getElementById('allocationChart');
-                    if (!canvas || typeof Chart === 'undefined') return;
-                    this.allocationChart = new Chart(canvas, {
-                        type: 'doughnut',
-                        data: {
-                            labels: ['Нет данных'],
-                            datasets: [{
-                                data: [1],
-                                backgroundColor: ['rgba(148, 163, 184, 0.15)'],
-                                borderColor: ['#0f172a'],
-                                borderWidth: 2
-                            }]
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: {
-                                legend: {
-                                    position: 'right',
-                                    labels: { color: '#cbd5e1', padding: 10, font: { size: 11 } }
-                                },
-                                datalabels: {
-                                    display: false,
-                                    formatter: () => ''
-                                },
-                                tooltip: {
-                                    callbacks: {
-                                        label: (ctx) => {
-                                            const val = Number(ctx.parsed) || 0;
-                                            const total = ctx.dataset.data.reduce((a, b) => Number(a || 0) + Number(b || 0), 0);
-                                            const pct = total > 0 ? (val / total * 100).toFixed(1) : '0.0';
-                                            return ` ${ctx.label}: ${this.formatRub(val)} (${pct}%)`;
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        plugins: [typeof ChartDataLabels !== 'undefined' ? ChartDataLabels : {}]
-                    });
-                },
                 updateStockChart() {
                     if (!this.stockChart) return;
                     const assets = this.dashboard.assets || [];
@@ -1279,70 +1270,6 @@
                         ];
                     }
                     this.stockChart.update();
-                },
-                updateAllocationChart() {
-                    const canvas = document.getElementById('allocationChart');
-                    if (!canvas || typeof Chart === 'undefined') return;
-
-                    // Destroy previous instance — Chart.js can't properly
-                    // resize doughnut charts that were initialized while hidden
-                    if (this.allocationChart) {
-                        this.allocationChart.destroy();
-                        this.allocationChart = null;
-                    }
-
-                    const d = this.dashboard;
-                    const stocksVal = Number(d.total_assets_value || 0);
-                    const depositsVal = Number(d.total_in_deposits || 0);
-
-                    const labels = [];
-                    const values = [];
-                    const colors = [];
-                    if (stocksVal > 0) { labels.push('Акции и фонды'); values.push(stocksVal); colors.push('#6366f1'); }
-                    if (depositsVal > 0) { labels.push('Банковские вклады'); values.push(depositsVal); colors.push('#f59e0b'); }
-                    if (values.length === 0) {
-                        labels.push('Нет данных');
-                        values.push(1);
-                        colors.push('rgba(148, 163, 184, 0.15)');
-                    }
-
-                    this.allocationChart = new Chart(canvas, {
-                        type: 'doughnut',
-                        data: {
-                            labels: labels,
-                            datasets: [{
-                                data: values,
-                                backgroundColor: colors,
-                                borderColor: colors.map(() => '#0f172a'),
-                                borderWidth: 2
-                            }]
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: {
-                                legend: {
-                                    position: 'right',
-                                    labels: { color: '#cbd5e1', padding: 10, font: { size: 11 } }
-                                },
-                                datalabels: {
-                                    display: false,
-                                    formatter: () => ''
-                                },
-                                tooltip: {
-                                    callbacks: {
-                                        label: (ctx) => {
-                                            const val = Number(ctx.parsed) || 0;
-                                            const total = ctx.dataset.data.reduce((a, b) => Number(a || 0) + Number(b || 0), 0);
-                                            const pct = total > 0 ? (val / total * 100).toFixed(1) : '0.0';
-                                            return ` ${ctx.label}: ${this.formatRub(val)} (${pct}%)`;
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        plugins: [typeof ChartDataLabels !== 'undefined' ? ChartDataLabels : {}]
-                    });
                 }
             }
         }).mount('#app');

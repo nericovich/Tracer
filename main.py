@@ -733,6 +733,9 @@ def startup_event() -> None:
             db.query(HiddenAsset).filter(HiddenAsset.user_id.is_(None)).update({"user_id": default_user.id})
             db.query(PortfolioHistory).filter(PortfolioHistory.user_id.is_(None)).update({"user_id": default_user.id})
             db.commit()
+        # Cleanup: remove history record for 2026-06-09
+        db.query(PortfolioHistory).filter(PortfolioHistory.date == date(2026, 6, 9)).delete()
+        db.commit()
     finally:
         db.close()
 
@@ -800,7 +803,8 @@ async def get_dashboard(
             .first()
         )
         if latest_update and latest_update[0]:
-            snapshot.prices_updated_at = latest_update[0].isoformat()
+            utc_time = latest_update[0].replace(tzinfo=timezone.utc)
+            snapshot.prices_updated_at = utc_time.isoformat()
     return snapshot
 
 
@@ -974,6 +978,43 @@ async def add_bank_deposit(
     db.refresh(new_deposit)
     update_portfolio_history(db, user.id)
     return {"id": new_deposit.id, "message": "Вклад добавлен", "expected_profit": expected_profit}
+
+
+@app.put("/api/bank-deposits/{deposit_id}")
+async def update_bank_deposit(
+    deposit_id: int,
+    deposit: BankDepositCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user_dep),
+) -> dict[str, Any]:
+    existing = db.query(BankDeposit).filter(
+        BankDeposit.id == deposit_id, BankDeposit.user_id == user.id
+    ).first()
+    if not existing:
+        raise HTTPException(status_code=404, detail="Вклад не найден.")
+    if deposit.end_date <= deposit.start_date:
+        raise HTTPException(status_code=400, detail="Дата окончания должна быть позже даты начала.")
+    expected_profit = (
+        deposit.expected_profit
+        if deposit.expected_profit is not None and deposit.expected_profit > 0
+        else (
+            compound_deposit_profit(deposit.amount, deposit.apy_percent, deposit.start_date, deposit.end_date, deposit.interest_payment_type)
+            if deposit.capitalize
+            else simple_deposit_profit(deposit.amount, deposit.apy_percent, deposit.start_date, deposit.end_date)
+        )
+    )
+    existing.bank_name = deposit.bank_name.strip()
+    existing.amount = deposit.amount
+    existing.start_date = deposit.start_date
+    existing.end_date = deposit.end_date
+    existing.apy_percent = deposit.apy_percent
+    existing.expected_profit = expected_profit
+    existing.interest_payment_type = deposit.interest_payment_type
+    existing.capitalize = deposit.capitalize
+    db.commit()
+    db.refresh(existing)
+    update_portfolio_history(db, user.id)
+    return {"id": existing.id, "message": "Вклад обновлён", "expected_profit": expected_profit}
 
 
 @app.delete("/api/bank-deposits/{deposit_id}")
