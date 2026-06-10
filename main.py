@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import calendar
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 
 import httpx
@@ -41,7 +41,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def create_access_token(user_id: int) -> str:
-    expire = datetime.utcnow() + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
+    expire = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
     return jwt.encode({"sub": str(user_id), "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
 
 
@@ -142,6 +142,12 @@ class DashboardResponse(BaseModel):
     assets_change_1m: float
     assets_change_1m_percent: float
     prices_updated_at: Optional[str] = None
+    usd_rub_rate: float = 90.0
+    total_capital_usd: float = 0.0
+    total_assets_value_usd: float = 0.0
+    total_in_deposits_usd: float = 0.0
+    cash_balance: float = 0.0
+    cash_balance_usd: float = 0.0
     assets: list[AssetHolding]
     deposits: list[dict[str, Any]]
 
@@ -288,11 +294,33 @@ async def update_price_from_moex(db: Session, ticker: str) -> Optional[float]:
     price_record = db.query(AssetPrice).filter(AssetPrice.ticker == secid).first()
     if price_record:
         price_record.current_price = price
-        price_record.last_updated = datetime.utcnow()
+        price_record.last_updated = datetime.now(timezone.utc).replace(tzinfo=None)
     else:
-        db.add(AssetPrice(ticker=secid, current_price=price, last_updated=datetime.utcnow()))
+        db.add(AssetPrice(ticker=secid, current_price=price, last_updated=datetime.now(timezone.utc).replace(tzinfo=None)))
     db.commit()
     return price
+
+
+async def get_usd_rub_rate() -> float:
+    """Fetch USD/RUB exchange rate from MOEX. Returns rate or fallback of 90.0"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://iss.moex.com/iss/engines/currency/markets/selt/securities/USDRUB_TOM.json",
+                params={"iss.meta": "off", "lang": "ru"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            data = response.json()
+        marketdata = data.get("marketdata", {})
+        rows = marketdata.get("data", [])
+        if rows:
+            rate = _value_by_column(marketdata, rows[0], "LAST")
+            if rate and float(rate) > 0:
+                return float(rate)
+    except Exception as exc:
+        print(f"MOEX USD/RUB rate error: {exc}")
+    return 90.0
 
 
 # ============ Financial Calculations ============
@@ -474,7 +502,7 @@ def get_or_create_price(db: Session, ticker: str) -> AssetPrice:
     price = db.query(AssetPrice).filter(AssetPrice.ticker == secid).first()
     if price:
         return price
-    price = AssetPrice(ticker=secid, current_price=0.0, last_updated=datetime.utcnow())
+    price = AssetPrice(ticker=secid, current_price=0.0, last_updated=datetime.now(timezone.utc).replace(tzinfo=None))
     db.add(price)
     db.commit()
     db.refresh(price)
@@ -531,7 +559,7 @@ async def compute_asset_period_changes(
 
 async def refresh_open_asset_prices(db: Session, user_id: int, max_age_minutes: int = 15) -> None:
     holdings = calculate_current_holdings(db, user_id)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     for ticker, holding in holdings.items():
         if holding["quantity"] <= 0:
             continue
@@ -546,7 +574,9 @@ async def refresh_open_asset_prices(db: Session, user_id: int, max_age_minutes: 
             await update_price_from_moex(db, ticker)
 
 
-def build_dashboard_snapshot(db: Session, user_id: int, valuation_date: Optional[date] = None) -> DashboardResponse:
+def build_dashboard_snapshot(
+    db: Session, user_id: int, valuation_date: Optional[date] = None, usd_rub_rate: float = 90.0
+) -> DashboardResponse:
     valuation_date = valuation_date or date.today()
     holdings = calculate_current_holdings(db, user_id)
     cash_balance = calculate_cash_balance(db, user_id)
@@ -624,6 +654,12 @@ def build_dashboard_snapshot(db: Session, user_id: int, valuation_date: Optional
         asset.portfolio_share_percent = (
             asset.total_value / total_assets_value * 100 if total_assets_value > 0 else 0
         )
+    # USD conversions
+    rate = usd_rub_rate if usd_rub_rate > 0 else 90.0
+    total_capital_usd = total_portfolio_value / rate
+    total_assets_value_usd = total_assets_value / rate
+    total_in_deposits_usd = total_in_deposits / rate
+    cash_balance_usd = cash_balance / rate
     return DashboardResponse(
         total_capital=total_portfolio_value, total_portfolio_value=total_portfolio_value,
         total_assets_value=total_assets_value, total_invested_in_assets=total_assets_cost_basis,
@@ -636,6 +672,12 @@ def build_dashboard_snapshot(db: Session, user_id: int, valuation_date: Optional
         total_unrealized_pnl_percent=(total_unrealized_pnl / total_cost_basis * 100) if total_cost_basis > 0 else 0,
         assets_change_1d=0.0, assets_change_1d_percent=0.0,
         assets_change_1m=0.0, assets_change_1m_percent=0.0,
+        usd_rub_rate=rate,
+        total_capital_usd=total_capital_usd,
+        total_assets_value_usd=total_assets_value_usd,
+        total_in_deposits_usd=total_in_deposits_usd,
+        cash_balance=cash_balance,
+        cash_balance_usd=cash_balance_usd,
         assets=assets, deposits=deposits_data,
     )
 
@@ -740,7 +782,8 @@ async def get_dashboard(
     user: User = Depends(get_current_user_dep),
 ) -> DashboardResponse:
     await refresh_open_asset_prices(db, user.id, max_age_minutes=0 if force else 15)
-    snapshot = build_dashboard_snapshot(db, user.id)
+    usd_rate = await get_usd_rub_rate()
+    snapshot = build_dashboard_snapshot(db, user.id, usd_rub_rate=usd_rate)
     period_changes = await compute_asset_period_changes(db, user.id, snapshot.total_assets_value)
     snapshot.assets_change_1d = period_changes["assets_change_1d"]
     snapshot.assets_change_1d_percent = period_changes["assets_change_1d_percent"]
@@ -817,9 +860,9 @@ async def update_price(
     price_record = db.query(AssetPrice).filter(AssetPrice.ticker == ticker).first()
     if price_record:
         price_record.current_price = price_update.current_price
-        price_record.last_updated = datetime.utcnow()
+        price_record.last_updated = datetime.now(timezone.utc).replace(tzinfo=None)
     else:
-        db.add(AssetPrice(ticker=ticker, current_price=price_update.current_price, last_updated=datetime.utcnow()))
+        db.add(AssetPrice(ticker=ticker, current_price=price_update.current_price, last_updated=datetime.now(timezone.utc).replace(tzinfo=None)))
     db.commit()
     update_portfolio_history(db, user.id)
     return {"ticker": ticker, "price": price_update.current_price}
@@ -867,7 +910,7 @@ async def hide_asset(
         HiddenAsset.user_id == user.id, HiddenAsset.ticker == secid
     ).first()
     if not hidden_asset:
-        db.add(HiddenAsset(user_id=user.id, ticker=secid, hidden_at=datetime.utcnow()))
+        db.add(HiddenAsset(user_id=user.id, ticker=secid, hidden_at=datetime.now(timezone.utc).replace(tzinfo=None)))
         db.commit()
     return {"ticker": secid, "message": "Актив скрыт из таблицы."}
 

@@ -120,6 +120,7 @@
         .stat-card-blue::before { background: linear-gradient(90deg, #6366f1, #8b5cf6); }
         .stat-card-cyan::before { background: linear-gradient(90deg, #06b6d4, #22d3ee); }
         .stat-card-amber::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+        .stat-card-violet::before { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
 
         .table-row {
             transition: background 0.2s ease;
@@ -277,17 +278,20 @@
                     <div class="surface rounded-2xl p-5 stat-card stat-card-blue">
                         <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Общий капитал</p>
                         <p class="mt-3 text-3xl font-bold text-white tracking-tight">{{ formatRub(dashboard.total_portfolio_value) }}</p>
+                        <p class="mt-1 text-sm text-slate-400">≈ {{ formatUsd(dashboard.total_capital_usd) }}</p>
                         <div class="mt-3 flex items-center gap-2">
                             <span :class="['badge', dashboard.total_unrealized_pnl >= 0 ? 'badge-success' : 'badge-danger']">
                                 {{ signedRub(dashboard.total_unrealized_pnl) }}
                             </span>
                             <span class="text-xs text-slate-500">{{ formatPercent(dashboard.total_unrealized_pnl_percent) }}</span>
                         </div>
+                        <p v-if="dashboard.usd_rub_rate" class="mt-2 text-xs text-slate-600">USD/RUB: {{ dashboard.usd_rub_rate.toFixed(2) }}</p>
                     </div>
 
                     <div class="surface rounded-2xl p-5 stat-card stat-card-cyan">
                         <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Акции и фонды</p>
                         <p class="mt-3 text-3xl font-bold text-cyan-300 tracking-tight">{{ formatRub(dashboard.total_assets_value) }}</p>
+                        <p class="mt-1 text-sm text-slate-400">≈ {{ formatUsd(dashboard.total_assets_value_usd) }}</p>
                         <p class="mt-2 text-xs text-slate-500">Себестоимость: {{ formatRub(dashboard.total_invested_in_assets) }}</p>
                         <div class="mt-2 grid grid-cols-2 gap-2">
                             <div class="soft rounded-lg px-2.5 py-1.5">
@@ -310,10 +314,19 @@
                     <div class="surface rounded-2xl p-5 stat-card stat-card-amber">
                         <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Банковские вклады</p>
                         <p class="mt-3 text-3xl font-bold text-amber-300 tracking-tight">{{ formatRub(dashboard.total_in_deposits) }}</p>
+                        <p class="mt-1 text-sm text-slate-400">≈ {{ formatUsd(dashboard.total_in_deposits_usd) }}</p>
                         <div class="mt-3 flex items-center gap-2">
                             <span class="badge badge-success">+ {{ formatRub(dashboard.total_deposits_accrued_profit) }}</span>
                             <span class="text-xs text-slate-500">начислено</span>
                         </div>
+                    </div>
+                </section>
+
+                <section v-if="dashboard.cash_balance !== 0" class="mb-6">
+                    <div class="surface rounded-2xl p-5 stat-card stat-card-violet">
+                        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Нераспределённые средства</p>
+                        <p class="mt-3 text-2xl font-bold text-violet-300 tracking-tight">{{ formatRub(dashboard.cash_balance) }}</p>
+                        <p class="mt-1 text-sm text-slate-400">≈ {{ formatUsd(dashboard.cash_balance_usd) }}</p>
                     </div>
                 </section>
 
@@ -674,6 +687,12 @@
                         assets_change_1d_percent: 0,
                         assets_change_1m: 0,
                         assets_change_1m_percent: 0,
+                        usd_rub_rate: 90,
+                        total_capital_usd: 0,
+                        total_assets_value_usd: 0,
+                        total_in_deposits_usd: 0,
+                        cash_balance: 0,
+                        cash_balance_usd: 0,
                         assets: [],
                         deposits: []
                     },
@@ -834,6 +853,14 @@
                         style: 'currency',
                         currency: 'RUB',
                         minimumFractionDigits: 0,
+                        maximumFractionDigits: 2
+                    }).format(Number(value || 0));
+                },
+                formatUsd(value) {
+                    return new Intl.NumberFormat('en-US', {
+                        style: 'currency',
+                        currency: 'USD',
+                        minimumFractionDigits: 2,
                         maximumFractionDigits: 2
                     }).format(Number(value || 0));
                 },
